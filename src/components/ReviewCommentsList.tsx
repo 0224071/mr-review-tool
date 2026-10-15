@@ -382,7 +382,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
       </div>
 
       {/* 2. Review Items List */}
-      <div className="divide-y divide-surface-border max-h-[620px] overflow-y-auto">
+      {/* 底部留出浮動發布列的高度（--publish-bar-space 由 AnalysisResultView 量測），清單內捲到底時最後一則不會被蓋住 */}
+      <div className="divide-y divide-surface-border max-h-[620px] overflow-y-auto pb-[var(--publish-bar-space,0px)] scroll-pb-[var(--publish-bar-space,0px)]">
         {filteredAndSortedReviews.length === 0 ? (
           <div className="p-8 text-center text-muted text-xs">
             目前篩選條件下無任何審查意見
@@ -418,10 +419,9 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                   isSelected ? 'bg-primary-subtle/25' : 'hover:bg-surface-subtle'
                 } ${isPublished ? 'opacity-85' : ''}`}
               >
-                {/* Single Row: Checkbox, Severity, File:Line, and Comment */}
+                {/* Header Row: Checkbox, Severity, File:Line；右側為操作按鈕 */}
                 <div className="flex items-start justify-between gap-2">
-                  {/* 手機寬度時換行，意見文字獨佔一行 */}
-                  <div className="flex flex-wrap sm:flex-nowrap items-start gap-2 flex-1 min-w-0">
+                  <div className="flex flex-wrap items-start gap-2 flex-1 min-w-0">
                     {/* Item Checkbox */}
                     <button
                       type="button"
@@ -488,23 +488,6 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                         <ChevronDown className="w-3 h-3 text-slate-400" />
                       )}
                     </button>
-
-                    {/* Comment text */}
-                    {!isEditing && (
-                      <span className="basis-full sm:basis-auto text-slate-800 font-medium leading-relaxed sm:pl-1 break-words">
-                        {currentDraft.comment}
-                      </span>
-                    )}
-
-                    {commentEmpty && (
-                      <span
-                        role="status"
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium text-[11px] shrink-0 mt-0.5 text-danger-text bg-danger-subtle"
-                      >
-                        <AlertCircle className="w-3 h-3 text-danger" />
-                        {EMPTY_COMMENT_MESSAGE}
-                      </span>
-                    )}
                   </div>
 
                   {/* Actions Toolbar: Only visible on hover or focus */}
@@ -595,6 +578,26 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Comment text：獨立一行佔滿卡片寬度，不和檔名、操作按鈕搶寬度；內文空了時改顯示提示 */}
+                {((!isEditing && currentDraft.comment) || commentEmpty) && (
+                  <div className="sm:pl-6 space-y-1.5">
+                    {!isEditing && currentDraft.comment && (
+                      <p className="text-slate-800 font-medium leading-relaxed break-words">
+                        {currentDraft.comment}
+                      </p>
+                    )}
+                    {commentEmpty && (
+                      <span
+                        role="status"
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium text-[11px] text-danger-text bg-danger-subtle"
+                      >
+                        <AlertCircle className="w-3 h-3 text-danger shrink-0" />
+                        {EMPTY_COMMENT_MESSAGE}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 {/* Editable comment input when editing */}
                 {isEditing && (

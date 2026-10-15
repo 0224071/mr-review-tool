@@ -48,23 +48,28 @@ export const MROverviewCard: React.FC<MROverviewCardProps> = ({
       {/* 1. Header: MR Title & Stats */}
       <div className="p-4 bg-surface-subtle border-b border-surface-border space-y-1.5">
         <div className="flex items-start justify-between gap-3">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-900 text-white px-1.5 py-0.5 rounded">
+          <div className="space-y-1 min-w-0">
+            {/* 手機寬度時分析時間與標籤換到標題下一行，標題不被擠窄；sm 以上維持同一行 */}
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-900 text-white px-1.5 py-0.5 rounded shrink-0">
                 MR 標題
               </span>
-              <h2 className="text-base font-bold text-slate-900 tracking-tight">
+              <h2 className="flex-1 sm:flex-initial min-w-0 text-base font-bold text-slate-900 tracking-tight break-words">
                 {result.title}
               </h2>
-              {analyzedAtLabel && (
-                <span className="text-[11px] text-muted whitespace-nowrap shrink-0">
-                  分析於 {analyzedAtLabel}
-                </span>
-              )}
-              {generatedByLabel && (
-                <span className="text-[10px] font-medium text-primary bg-primary-subtle border border-primary-border rounded px-1.5 py-0.5 whitespace-nowrap shrink-0">
-                  {generatedByLabel}
-                </span>
+              {(analyzedAtLabel || generatedByLabel) && (
+                <div className="basis-full sm:basis-auto flex items-center gap-2 shrink-0">
+                  {analyzedAtLabel && (
+                    <span className="text-[11px] text-muted whitespace-nowrap shrink-0">
+                      分析於 {analyzedAtLabel}
+                    </span>
+                  )}
+                  {generatedByLabel && (
+                    <span className="text-[10px] font-medium text-primary bg-primary-subtle border border-primary-border rounded px-1.5 py-0.5 whitespace-nowrap shrink-0">
+                      {generatedByLabel}
+                    </span>
+                  )}
+                </div>
               )}
             </div>
             {/* One-line statistics */}

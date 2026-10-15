@@ -71,3 +71,8 @@
   --color-group-8-bg: #f5f3ff;
   --color-group-8-text: #5b21b6;
 }
+
+/* 浮動發布列（AnalysisResultView）出現時，鍵盤聚焦或 scrollIntoView 捲動頁面會避開它 */
+html {
+  scroll-padding-bottom: var(--publish-bar-space, 0px);
+}
