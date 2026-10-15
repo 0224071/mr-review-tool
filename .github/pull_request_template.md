@@ -16,7 +16,7 @@ Closes #
 ## 檢查清單
 
 - [ ] 已補上對應的測試
-- [ ] CI 綠燈（`ci`、`gitleaks`）
+- [ ] CI 綠燈（`ci`、`gitleaks`、`e2e`）
 - [ ] 沒有與本 PR 無關的多餘改動
 - [ ] 沒有寫死的值或機密（API key、token、密碼等）
 - [ ] UI 變更已附截圖（無 UI 變更可勾選）
