@@ -29,7 +29,7 @@ export default function Root({ demoTiming }: RootProps) {
       setSession((s) => s + 1);
     };
     return isDemo
-      ? createDemoServices({ onExit: exitDemo, onRestart: startDemo, ...demoTiming })
+      ? createDemoServices({ onExit: exitDemo, ...demoTiming })
       : createLiveServices({ onTryDemo: startDemo });
     // session 變動時也重建，讓重新開始的示範拿到全新的假服務
   }, [isDemo, session, demoTiming]);

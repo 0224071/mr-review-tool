@@ -9,7 +9,7 @@ import { SAMPLE_DIFF_REFS } from '../services/diff-sources/sample-diffs';
 import { GitLabDiffRefs } from '../types/gitlab';
 import { MRReviewItem } from '../types/review';
 import { EMPTY_COMMENT_MESSAGE, hasCommentText } from '../core/review-text';
-import { DEMO_NOTICE } from './demo-mode';
+import { DEMO_NOTICE, DEMO_PUBLISH_CONFIRM_TITLE } from './demo-mode';
 
 export const DEMO_PUBLISH_DELAY_MS = 300;
 
@@ -76,6 +76,7 @@ export function createDemoGitLabGateway(options: { delayMs?: number } = {}): Git
   let noteSeq = 0;
   return {
     notice: DEMO_NOTICE,
+    publishConfirmTitle: DEMO_PUBLISH_CONFIRM_TITLE,
     targetLabel: '示範 MR',
     // 範例 diff 的假版本資訊，讓行號已驗證的意見和正式版一樣以行內留言發布
     fallbackDiffRefs: SAMPLE_DIFF_REFS,

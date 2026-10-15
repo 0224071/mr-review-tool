@@ -30,6 +30,10 @@ import { ChecklistCoverageBanner } from './ChecklistCoverageBanner';
 import { DraftEdits } from '../core/history-store';
 import { filterPublishableItems } from '../core/review-text';
 import { PublishedMatch } from '../core/publish-dedup';
+import { DisabledReasonText, TapForReason, useDisabledReason } from './DisabledReason';
+
+/** 手機點到停用的「發布已選 0 則」時顯示的原因 */
+export const PUBLISH_NONE_SELECTED_REASON = '還沒有勾選意見：先在清單勾選要發布的意見';
 
 interface AnalysisResultViewProps {
   result: MRAnalysisResult;
@@ -151,6 +155,8 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   const publishMenuRef = useRef<HTMLDivElement>(null);
   const stickyMoreRef = useRef<HTMLDivElement>(null);
   const publishBarRef = useRef<HTMLDivElement>(null);
+  // 手機點到停用的「發布已選 0 則」時，在發布列上方說明原因
+  const [publishBarHint, showPublishBarHint] = useDisabledReason<'bar'>();
 
   // Close menus when clicking outside
   useEffect(() => {
@@ -285,13 +291,17 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   const mrMatch = mrUrl ? mrUrl.match(/merge_requests\/(\d+)/) : null;
   const mrIid = mrMatch ? mrMatch[1] : '';
 
-  // 浮動發布列會疊在內容上：把它佔的高度（含 bottom-4 的 16px）寫進 --publish-bar-space，
+  // 浮動發布列會疊在內容上：把它佔的高度加上 sticky 的 bottom 間距寫進 --publish-bar-space，
   // 讓頁面捲動（scroll-padding）與意見清單底部留白都避開它，最後一則也能完整捲出來
   useEffect(() => {
     const bar = publishBarRef.current;
     const root = document.documentElement;
     if (!bar) return;
-    const update = () => root.style.setProperty('--publish-bar-space', `${bar.offsetHeight + 16}px`);
+    const update = () => {
+      // bottom 由樣式決定（目前為 bottom-4），讀實際值而不寫死；讀不到（如 auto）時當作 0
+      const bottom = parseFloat(getComputedStyle(bar).bottom) || 0;
+      root.style.setProperty('--publish-bar-space', `${bar.offsetHeight + bottom}px`);
+    };
     update();
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
     observer?.observe(bar);
@@ -738,6 +748,10 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
       {/* 5. Sticky Action Bar: ONLY appears when analysisResult exists AND connected to GitLab MR */}
       {hasGitLabMr && (
         <div ref={publishBarRef} role="region" aria-label="發布列" className="sticky bottom-4 z-30 mt-4 animate-in slide-in-from-bottom duration-200">
+          {/* 疊在發布列上方，不改變發布列高度 */}
+          {publishBarHint && (
+            <DisabledReasonText message={publishBarHint.message} className="absolute bottom-full right-0 mb-2 shadow-md" />
+          )}
           <div className="bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-xl shadow-xl border border-slate-700/80 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
             {/* Left: Selected count & MR info */}
             <div className="flex items-center gap-2 text-xs min-w-0">
@@ -805,15 +819,20 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
               )}
 
               {/* The ONE Primary Button: Orange Solid */}
-              <button
-                type="button"
-                onClick={handlePublishSelectedBatch}
-                disabled={publishableSelectedCount === 0 || isPublishing}
-                className="px-4 py-2 bg-gitlab hover:bg-gitlab-hover text-white rounded-lg text-xs font-semibold shadow-xs disabled:opacity-40 transition-colors flex items-center gap-1.5 cursor-pointer"
+              <TapForReason
+                reason={publishableSelectedCount === 0 && !isPublishing ? PUBLISH_NONE_SELECTED_REASON : null}
+                onReason={(message) => showPublishBarHint('bar', message)}
               >
-                <Send className="w-3.5 h-3.5" />
-                <span>發布已選 {publishableSelectedCount} 則</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={handlePublishSelectedBatch}
+                  disabled={publishableSelectedCount === 0 || isPublishing}
+                  className="px-4 py-2 bg-gitlab hover:bg-gitlab-hover text-white rounded-lg text-xs font-semibold shadow-xs disabled:opacity-40 disabled:pointer-events-none transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>發布已選 {publishableSelectedCount} 則</span>
+                </button>
+              </TapForReason>
             </div>
           </div>
         </div>

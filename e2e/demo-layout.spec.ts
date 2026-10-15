@@ -12,8 +12,8 @@ const RESTORED_COMMENT = '補回的內文：這一行需要補上錯誤處理，
 const DESKTOP = {width: 1440, height: 900};
 const MOBILE = {width: 390, height: 844};
 
-const checkboxes = (page: Page) =>
-  page.getByRole('button', {name: /^(勾選此意見|內文是空的，不會發布|已發布過，勾選將重複發布)$/});
+/** 每則意見前的勾選框（aria-label「勾選此意見：檔名:行號」） */
+const checkboxes = (page: Page) => page.getByLabel(/^勾選此意見：/);
 const publishBar = (page: Page) => page.getByRole('region', {name: '發布列'});
 /** 勾選框所在的意見卡片 */
 const cardOf = (el: Locator) => el.locator('xpath=ancestor::*[@tabindex="0"][1]');
@@ -39,7 +39,7 @@ const openDemoResult = async (page: Page) => {
 const setComment = async (page: Page, index: number, text: string) => {
   const card = cardOf(checkboxes(page).nth(index));
   await card.getByRole('button', {name: '編輯草稿'}).click();
-  await card.getByRole('textbox').first().fill(text);
+  await card.getByLabel('意見評論內文 (Comment)：').fill(text);
   await card.getByRole('button', {name: '完成編輯'}).click();
   return card;
 };
