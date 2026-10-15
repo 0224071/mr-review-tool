@@ -231,6 +231,120 @@ describe('useAnalysis', () => {
     expect(result.current.draftEdits).toEqual(cached.draftEdits);
   });
 
+  describe('切換 MR 時只套用最新一次抓取的回應', () => {
+    const MR_A = { ...MR, web_url: 'https://gitlab.example.com/grp/proj/-/merge_requests/1', iid: 1, title: 'FAKE-MR-A', diff_refs: { base_sha: 'b', start_sha: 's', head_sha: 'FAKE-head-a' } } as GitLabMergeRequestInfo;
+    const MR_B = { ...MR, web_url: 'https://gitlab.example.com/grp/proj/-/merge_requests/2', iid: 2, title: 'FAKE-MR-B', diff_refs: { base_sha: 'b', start_sha: 's', head_sha: 'FAKE-head-b' } } as GitLabMergeRequestInfo;
+    const DIFF_B = 'diff --git a/FAKE-b.ts b/FAKE-b.ts\n--- a/FAKE-b.ts\n+++ b/FAKE-b.ts\n@@ -1 +1 @@\n-old\n+new\n';
+
+    function deferred<T>() {
+      let resolve!: (v: T) => void;
+      let reject!: (e: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    /** MR A 的某個 GET 卡住；MR B 立即回應。A 的留言帶與 A 目前版本相同的共享報告（若被套用就會自動載入） */
+    function setupRace(slow: 'mr' | 'notes') {
+      const { store } = createMemoryStore();
+      const ctx = setup({ store, initialRawDiff: '' });
+      const gate = deferred<void>();
+      const iidOf = (t: { mrIid: number }) => t.mrIid;
+      vi.mocked(ctx.gitlab.resolveTarget).mockImplementation(((url: string) => ({
+        baseUrl: 'https://gitlab.example.com',
+        token: 't',
+        projectPath: 'grp/proj',
+        mrIid: url.endsWith('/1') ? 1 : 2,
+      })) as never);
+      vi.mocked(ctx.gitlab.fetchMergeRequest).mockImplementation((async (t: { mrIid: number }) => {
+        if (iidOf(t) === 1 && slow === 'mr') await gate.promise;
+        return iidOf(t) === 1 ? MR_A : MR_B;
+      }) as never);
+      vi.mocked(ctx.gitlab.fetchRawDiff).mockImplementation((async (t: { mrIid: number }) =>
+        iidOf(t) === 1 ? SAMPLE_GIT_DIFF : DIFF_B) as never);
+      vi.mocked(ctx.gitlab.fetchNotes).mockImplementation((async (t: { mrIid: number }) => {
+        if (iidOf(t) !== 1) return [];
+        if (slow === 'notes') await gate.promise;
+        return [sharedNote({ ...SAMPLE_ANALYSIS_RESULT, headSha: 'FAKE-head-a' })];
+      }) as never);
+      return { ...ctx, store, gate };
+    }
+
+    const expectShowingB = (current: ReturnType<typeof useAnalysis>) => {
+      expect(current.currentGitLabMr).toBe(MR_B);
+      expect(current.rawDiff).toBe(DIFF_B);
+      expect(current.remoteNotes).toEqual([]);
+      expect(current.analysisResult).toBeNull();
+      expect(current.staleSharedAnalysis).toBeNull();
+      expect(current.infoMessage).toBeNull();
+      expect(current.gitlabError).toBeNull();
+      expect(current.isFetchingGitLab).toBe(false);
+    };
+
+    it('先切到 A 再切到 B，A 的 MR 資訊較晚回來：畫面維持 B', async () => {
+      const { result, gate, store } = setupRace('mr');
+      let fetchA!: Promise<void>;
+      await actAsync(() => {
+        fetchA = result.current.handleFetchGitLabMr(MR_A.web_url);
+      });
+      expect(result.current.isFetchingGitLab).toBe(true);
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_B.web_url));
+      expectShowingB(result.current);
+
+      await actAsync(async () => {
+        gate.resolve();
+        await fetchA;
+      });
+      expectShowingB(result.current);
+      expect(store.put).not.toHaveBeenCalled();
+    });
+
+    it('A 已填入 MR 後留言才晚回來（帶目前版本的共享報告）：不自動載入、畫面維持 B', async () => {
+      const { result, gate } = setupRace('notes');
+      let fetchA!: Promise<void>;
+      await actAsync(() => {
+        fetchA = result.current.handleFetchGitLabMr(MR_A.web_url);
+      });
+      expect(result.current.currentGitLabMr).toBe(MR_A);
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_B.web_url));
+      await actAsync(async () => {
+        gate.resolve();
+        await fetchA;
+      });
+      expectShowingB(result.current);
+      expect(analyzeGitDiff).not.toHaveBeenCalled();
+    });
+
+    it('A 較晚回來的錯誤不顯示；B 還在抓取時 A 回來也不結束 loading', async () => {
+      const { result, gitlab, gate } = setupRace('mr');
+      let fetchA!: Promise<void>;
+      await actAsync(() => {
+        fetchA = result.current.handleFetchGitLabMr(MR_A.web_url);
+      });
+      // B 的 diff 也卡住：A 失敗時 B 仍在抓取中
+      const gateB = deferred<string>();
+      vi.mocked(gitlab.fetchRawDiff).mockImplementationOnce(() => gateB.promise);
+      let fetchB!: Promise<void>;
+      await actAsync(() => {
+        fetchB = result.current.handleFetchGitLabMr(MR_B.web_url);
+      });
+      await actAsync(async () => {
+        gate.reject(new Error('FAKE-A-failed'));
+        await fetchA;
+      });
+      expect(result.current.gitlabError).toBeNull();
+      expect(result.current.isFetchingGitLab).toBe(true);
+
+      await actAsync(async () => {
+        gateB.resolve(DIFF_B);
+        await fetchB;
+      });
+      expectShowingB(result.current);
+    });
+  });
+
   it('抓取 MR 失敗時顯示 GitLab 錯誤', async () => {
     const { result, gitlab } = setup();
     vi.mocked(gitlab.fetchMergeRequest).mockRejectedValueOnce(new Error('401 Unauthorized'));

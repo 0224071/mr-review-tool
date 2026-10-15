@@ -18,6 +18,7 @@ import { ParsedDiff } from '../types/diff';
 import type { StaleSharedAnalysis } from '../hooks/useAnalysis';
 import { GitLabMergeRequestInfo } from '../types/gitlab';
 import { getMixedContentWarning } from '../core/mixed-content';
+import { formatYmd } from '../core/date-format';
 
 interface DiffInputPanelProps {
   rawDiff: string;
@@ -259,37 +260,37 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
                 className="p-2.5 bg-warning-subtle border border-warning-border rounded-lg space-y-1.5 animate-in fade-in duration-200 text-xs"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-semibold text-warning-text flex items-center gap-1">
+                  <span className="font-semibold text-warning-text flex items-center gap-1 min-w-0">
                     <Users className="w-3.5 h-3.5 text-warning shrink-0" />
                     MR 上的共享分析報告已過期，未載入
                   </span>
-                  <span className="text-[10px] bg-surface text-warning-text border border-warning-border px-1.5 py-0.5 rounded font-semibold shrink-0">
-                    需要重新分析
-                  </span>
+                  {/* 與下方「分析」按鈕走同一個流程（有同版本快取就直接顯示，否則呼叫 AI） */}
+                  <button
+                    type="button"
+                    onClick={onAnalyze}
+                    disabled={isLoading || !rawDiff.trim()}
+                    className="text-[11px] bg-surface hover:bg-warning-subtle text-warning-text border border-warning-border px-2 py-0.5 rounded-md font-semibold shrink-0 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    重新分析
+                  </button>
                 </div>
                 <p className="text-[11px] text-warning-text">
-                  由 @{staleSharedAnalysis.author} 於 {new Date(staleSharedAnalysis.createdAt).toLocaleDateString()} 發布
+                  由 @{staleSharedAnalysis.author} 於 {formatYmd(staleSharedAnalysis.createdAt)} 發布
                 </p>
                 <p className="text-[11px] text-warning-text leading-snug">
-                  {staleSharedAnalysis.sharedHeadSha ? (
-                    <>
-                      報告分析的是{' '}
-                      <code className="font-mono">{staleSharedAnalysis.sharedHeadSha.slice(0, 8)}</code>
-                      {staleSharedAnalysis.currentHeadSha ? (
-                        <>
-                          ，MR 目前為 <code className="font-mono">{staleSharedAnalysis.currentHeadSha.slice(0, 8)}</code>
-                          （已有新的 commit）
-                        </>
-                      ) : (
-                        '，無法取得 MR 目前的版本'
-                      )}
-                      。
-                    </>
-                  ) : (
-                    '此報告由舊版工具分享，沒有記錄分析時的 commit，無法確認是否對應 MR 目前的版本。'
-                  )}
-                  請按「分析」重新分析。
+                  {staleSharedAnalysis.sharedHeadSha
+                    ? '這份報告分析完後，MR 又有新的 commit，內容可能已經不準。'
+                    : '這份報告由舊版工具分享，沒有記錄分析時的 commit，無法確認是否對應 MR 目前的版本。'}
                 </p>
+                {staleSharedAnalysis.sharedHeadSha && (
+                  <p className="text-[10px] text-muted font-mono break-all">
+                    報告 {staleSharedAnalysis.sharedHeadSha.slice(0, 8)}
+                    {staleSharedAnalysis.currentHeadSha
+                      ? ` → 目前 ${staleSharedAnalysis.currentHeadSha.slice(0, 8)}`
+                      : ' · 無法取得 MR 目前的版本'}
+                  </p>
+                )}
               </div>
             )}
 

@@ -27,8 +27,20 @@ export interface ShareConfirmState {
   targetNoteId: number | null;
   /** 覆寫的是既有分享報告或整體摘要留言；null 表示新增 */
   overwrite: 'shared' | 'summary' | null;
-  /** 被覆寫留言的作者 */
+  /** 被覆寫留言的作者 handle（GitLab username） */
   overwriteAuthor?: string;
+  /** 被覆寫留言的發布時間（ISO 字串） */
+  overwriteCreatedAt?: string;
+  /** 被覆寫留言的網址（MR 網址 + #note_<id>） */
+  overwriteNoteUrl?: string;
+}
+
+/** 共享分析的進度：讀取 MR 留言（GET，尚未寫入）或寫入分享留言 */
+export type ShareStage = 'reading' | 'writing';
+
+/** MR 上某則留言的網址：MR 網址（去掉既有的 #）+ #note_<id> */
+export function buildNoteUrl(mrWebUrl: string, noteId: number): string {
+  return `${mrWebUrl.split('#')[0]}#note_${noteId}`;
 }
 
 export interface UsePublishOptions {
@@ -74,7 +86,9 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
     setInfoMessage,
   } = analysis;
 
-  const [isSharingToMr, setIsSharingToMr] = useState<boolean>(false);
+  /** 共享分析進行中的階段；null 表示沒有進行中的作業 */
+  const [shareStage, setShareStage] = useState<ShareStage | null>(null);
+  const isSharingToMr = shareStage !== null;
 
   // Confirmation Modal state
   const [isPublishModalOpen, setIsPublishModalOpen] = useState<boolean>(false);
@@ -363,7 +377,8 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
       return;
     }
 
-    setIsSharingToMr(true);
+    // 這段只用 GET 讀留言，按鈕顯示「讀取留言中」
+    setShareStage('reading');
     try {
       // 4. 整體留言去重：若使用者先發整體摘要、後發分享報告，分享報告改為更新既有的摘要留言，讓 MR 上只保留一則整體留言
       const notes = await gitlab.fetchNotes(target);
@@ -373,19 +388,21 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         target,
         targetNoteId: overwriteNote ? overwriteNote.id : null,
         overwrite: sharedNote ? 'shared' : summaryNote ? 'summary' : null,
-        overwriteAuthor: overwriteNote ? overwriteNote.author.name || overwriteNote.author.username : undefined,
+        overwriteAuthor: overwriteNote ? overwriteNote.author.username || overwriteNote.author.name : undefined,
+        overwriteCreatedAt: overwriteNote?.created_at,
+        overwriteNoteUrl: overwriteNote ? buildNoteUrl(mrUrl, overwriteNote.id) : undefined,
       });
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : '讀取 MR 留言失敗，未共享分析報告');
     } finally {
-      setIsSharingToMr(false);
+      setShareStage(null);
     }
   };
 
   /** 確認視窗按「確認共享」：寫入（新增或覆寫）分享留言，標記中帶分析當時的 head sha */
   const handleConfirmShareAnalysis = async () => {
     if (!analysisResult || !shareConfirm || isSharingToMr) return;
-    setIsSharingToMr(true);
+    setShareStage('writing');
     try {
       await gitlab.shareAnalysis(
         shareConfirm.target,
@@ -399,7 +416,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : '分享報告至 MR 留言失敗');
     } finally {
-      setIsSharingToMr(false);
+      setShareStage(null);
       setShareConfirm(null);
     }
   };
@@ -435,6 +452,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
     isPublishingInProgress,
     publishModalConfig,
     isSharingToMr,
+    shareStage,
     shareConfirm,
     duplicateWarning,
     handlePublishSingleReview,
