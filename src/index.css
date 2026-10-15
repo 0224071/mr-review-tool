@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #4f46e5;
+  --color-primary-hover: #4338ca;
+  --color-primary-subtle: #eef2ff;
+  --color-primary-border: #c7d2fe;
+
+  --color-gitlab: #ea580c;
+  --color-gitlab-hover: #c2410c;
+  --color-gitlab-subtle: #fff7ed;
+  --color-gitlab-border: #fed7aa;
+
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f8fafc;
+  --color-surface-muted: #f1f5f9;
+  --color-surface-border: #e2e8f0;
+
+  --color-muted: #64748b;
+  --color-muted-light: #94a3b8;
+  --color-muted-dark: #334155;
+
+  --color-group-1: #6366f1;
+  --color-group-1-bg: #eef2ff;
+  --color-group-1-text: #3730a3;
+
+  --color-group-2: #10b981;
+  --color-group-2-bg: #ecfdf5;
+  --color-group-2-text: #065f46;
+
+  --color-group-3: #0ea5e9;
+  --color-group-3-bg: #f0f9ff;
+  --color-group-3-text: #0369a1;
+
+  --color-group-4: #a855f7;
+  --color-group-4-bg: #faf5ff;
+  --color-group-4-text: #6b21a8;
+
+  --color-group-5: #f59e0b;
+  --color-group-5-bg: #fffbeb;
+  --color-group-5-text: #92400e;
+
+  --color-group-6: #f43f5e;
+  --color-group-6-bg: #fff1f2;
+  --color-group-6-text: #9f1239;
+
+  --color-group-7: #06b6d4;
+  --color-group-7-bg: #ecfeff;
+  --color-group-7-text: #155e75;
+
+  --color-group-8: #8b5cf6;
+  --color-group-8-bg: #f5f3ff;
+  --color-group-8-text: #5b21b6;
+}
