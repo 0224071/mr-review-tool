@@ -27,6 +27,8 @@ interface PublishConfirmationModalProps {
   /** 分析時的 diff_refs，用來預估每則是行內或一般留言 */
   diffRefs?: GitLabDiffRefs;
   isPublishingSummary?: boolean;
+  /** 共享分析報告（隱藏標記留言）；overwrite 為要覆寫的既有留言種類，null 表示新增一則 */
+  share?: { overwrite: 'shared' | 'summary' | null; overwriteAuthor?: string };
   summaryTitle?: string;
   /** 視窗標題；未提供時依發布內容顯示預設標題（示範模式：「模擬發布（示範，不會送到 GitLab）」） */
   title?: string;
@@ -56,6 +58,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
   itemsToPublish,
   diffRefs,
   isPublishingSummary = false,
+  share,
   summaryTitle,
   title,
   targetLabel,
@@ -66,7 +69,14 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
 
   const generalCount = itemsToPublish.filter((i) => plannedPublishMode(i.review, diffRefs) === 'general').length;
   const unverifiedCount = itemsToPublish.filter((i) => i.review.lineVerified === false).length;
-  const heading = title ?? (isPublishingSummary ? '確認發布整體摘要留言' : '確認發布審查意見至 GitLab');
+  const heading =
+    title ?? (share ? '確認共享分析報告至 MR' : isPublishingSummary ? '確認發布整體摘要留言' : '確認發布審查意見至 GitLab');
+  const overwriteLabel = share?.overwrite === 'shared' ? '既有的共享分析報告留言' : '既有的整體摘要留言';
+  const confirmLabel = share
+    ? share.overwrite
+      ? '確認共享（覆寫 1 則留言）'
+      : '確認共享（新增 1 則留言）'
+    : `確認發送 (${isPublishingSummary ? '1 則摘要' : `${itemsToPublish.length} 則意見`})`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50 backdrop-blur-xs p-4 animate-in fade-in duration-150">
@@ -87,7 +97,11 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
                 {heading}
               </h2>
               <p className="text-xs text-muted">
-                {notice ? `模擬發布：${notice}` : '透過 GitLab Discussions API 直接發表至 MR'}
+                {notice
+                  ? `模擬發布：${notice}`
+                  : share
+                    ? '透過 GitLab Notes API 寫入 MR 留言'
+                    : '透過 GitLab Discussions API 直接發表至 MR'}
               </p>
             </div>
           </div>
@@ -136,7 +150,37 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
             )}
           </div>
 
-          {isPublishingSummary ? (
+          {share ? (
+            <div className="space-y-2">
+              <div className="p-3 bg-primary-subtle border border-primary-border rounded-lg space-y-1">
+                <div className="font-semibold text-ink flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-primary" />
+                  {share.overwrite ? `將覆寫 MR 上${overwriteLabel}` : '將在 MR 新增一則留言'}
+                </div>
+                <p className="text-muted-dark">
+                  留言包含分析摘要、意圖分組、審查意見統計，以及供本工具載入的隱藏標記與完整分析結果（JSON）。能看到此 MR
+                  的人都看得到內容。
+                </p>
+              </div>
+              {share.overwrite && (
+                <div
+                  role="note"
+                  className="p-3 bg-warning-subtle border border-warning-border rounded-lg flex items-start gap-2 text-[11px] text-warning-text"
+                >
+                  <AlertCircle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold">
+                      MR 上已有{overwriteLabel}
+                      {share.overwriteAuthor ? `（@${share.overwriteAuthor}）` : ''}
+                    </span>
+                    <p className="mt-0.5">
+                      送出後會以這次的分析覆寫該留言的內容，不會另外新增留言；原本的內容將被取代。
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : isPublishingSummary ? (
             <div className="p-3 bg-primary-subtle border border-primary-border rounded-lg space-y-1">
               <div className="font-semibold text-ink flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-primary" />
@@ -212,7 +256,9 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
             <div>
               {notice
                 ? `${notice}：送出後只在畫面上標示「已發布」，方便體驗流程。`
-                : '送出後將直接發表在 GitLab 專案中，送出成功後該項目會標示「已發布」以避免重複送出；失敗的項目可在清單中重試。'}
+                : share
+                  ? '送出後將直接寫入 GitLab；團隊成員開啟同一 MR 時，若 MR 沒有新的 commit 就會自動載入這份報告。'
+                  : '送出後將直接發表在 GitLab 專案中，送出成功後該項目會標示「已發布」以避免重複送出；失敗的項目可在清單中重試。'}
             </div>
           </div>
         </div>
@@ -242,7 +288,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
               <>
                 <Send className="w-3.5 h-3.5" />
                 <span>
-                  確認發送 ({isPublishingSummary ? '1 則摘要' : `${itemsToPublish.length} 則意見`})
+                  {confirmLabel}
                   {notice && `・${notice}`}
                 </span>
               </>

@@ -7,7 +7,7 @@ import { SAMPLE_GIT_DIFF } from '../services/diff-sources/sample-diffs';
 import { SAMPLE_ANALYSIS_RESULT } from '../services/diff-sources/sample-analysis';
 import { OPENROUTER_SUGGESTED_FREE_MODEL } from '../providers/openai-compatible';
 import { LlmError } from '../providers/errors';
-import { buildDiffHistoryKey, HistoryStore } from '../core/history-store';
+import { buildDiffHistoryKey, buildMrHistoryKey, HistoryStore } from '../core/history-store';
 import { buildProviderCacheKey } from '../core/analysis-record';
 import { SHARED_TAG_END, SHARED_TAG_START } from '../services/gitlab-api';
 import type { GitLabGateway } from '../app/app-services';
@@ -32,6 +32,9 @@ const note = (body: string): GitLabNote => ({
   created_at: '2026-01-01T00:00:00Z',
   system: false,
 });
+
+const sharedNote = (json: object) =>
+  note(`${SHARED_TAG_START}\n\`\`\`json\n${JSON.stringify(json)}\n\`\`\`\n${SHARED_TAG_END}`);
 
 function setup({
   store = null,
@@ -164,20 +167,68 @@ describe('useAnalysis', () => {
     expect(result.current.suggestFreeModel).toBe(false);
   });
 
-  it('抓取 MR：填入 MR、diff 與留言，並偵測已分享的分析', async () => {
-    const shared = note(`${SHARED_TAG_START}\n\`\`\`json\n${JSON.stringify(SAMPLE_ANALYSIS_RESULT)}\n\`\`\`\n${SHARED_TAG_END}`);
-    const { result, gitlab } = setup({ initialRawDiff: '', notes: [shared] });
+  it('抓取 MR：填入 MR、diff 與留言；共享報告與 MR 目前版本相同時自動載入，不呼叫 AI', async () => {
+    const shared = sharedNote({ ...SAMPLE_ANALYSIS_RESULT, headSha: 'h1' });
+    const { store } = createMemoryStore();
+    const { result, gitlab } = setup({ store, initialRawDiff: '', notes: [shared] });
     await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
     expect(gitlab.resolveTarget).toHaveBeenCalledWith(MR_URL, DEFAULT_SETTINGS);
     expect(result.current.currentGitLabMr).toBe(MR);
     expect(result.current.rawDiff).toBe(SAMPLE_GIT_DIFF);
     expect(result.current.remoteNotes).toEqual([shared]);
-    expect(result.current.sharedAnalysisAvailable?.author).toBe('Ann');
     expect(result.current.isFetchingGitLab).toBe(false);
 
-    await actAsync(() => result.current.handleLoadSharedAnalysis());
+    expect(analyzeGitDiff).not.toHaveBeenCalled();
     expect(result.current.analysisResult?.title).toBe(SAMPLE_ANALYSIS_RESULT.title);
-    expect(result.current.sharedAnalysisAvailable).toBeNull();
+    expect(result.current.analysisResult).not.toHaveProperty('headSha');
+    expect(result.current.resultDiffRefs).toEqual(MR.diff_refs);
+    expect(result.current.staleSharedAnalysis).toBeNull();
+    expect(result.current.infoMessage).toContain('@Ann');
+    expect(store.put).toHaveBeenCalledWith(expect.objectContaining({ headSha: 'h1' }), expect.any(Number));
+  });
+
+  it('共享報告的 headSha 與 MR 目前 head sha 不同：不載入，只顯示需重新分析的提示', async () => {
+    const shared = sharedNote({ ...SAMPLE_ANALYSIS_RESULT, headSha: 'FAKE-old-head' });
+    const { store } = createMemoryStore();
+    const { result } = setup({ store, initialRawDiff: '', notes: [shared] });
+    await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+    expect(result.current.analysisResult).toBeNull();
+    expect(store.put).not.toHaveBeenCalled();
+    expect(result.current.staleSharedAnalysis).toEqual({
+      author: 'Ann',
+      createdAt: '2026-01-01T00:00:00Z',
+      sharedHeadSha: 'FAKE-old-head',
+      currentHeadSha: 'h1',
+    });
+    expect(analyzeGitDiff).not.toHaveBeenCalled();
+  });
+
+  it('舊版標記沒有 headSha：一律視為不符，不自動載入', async () => {
+    const shared = sharedNote(SAMPLE_ANALYSIS_RESULT);
+    const { result } = setup({ initialRawDiff: '', notes: [shared] });
+    await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+    expect(result.current.analysisResult).toBeNull();
+    expect(result.current.staleSharedAnalysis).toMatchObject({ sharedHeadSha: null, currentHeadSha: 'h1' });
+  });
+
+  it('過期提示在重新分析出結果後消失', async () => {
+    analyzeGitDiff.mockResolvedValue(RESULT);
+    const { result } = setup({ initialRawDiff: '', notes: [sharedNote({ ...SAMPLE_ANALYSIS_RESULT, headSha: 'FAKE-old-head' })] });
+    await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+    expect(result.current.staleSharedAnalysis).not.toBeNull();
+    await actAsync(() => result.current.handleAnalyze());
+    expect(result.current.analysisResult?.title).toBe(RESULT.title);
+    expect(result.current.staleSharedAnalysis).toBeNull();
+  });
+
+  it('本機已有同版本的快取時以快取為準，不用共享報告覆蓋', async () => {
+    const id = buildProviderCacheKey(buildMrHistoryKey('https://gitlab.example.com', 'grp/proj', 7), { provider: 'gemini', model: 'gemini-3.8-flash' });
+    const cached = makeRecord({ id, sourceType: 'gitlab', result: RESULT, rawDiff: SAMPLE_GIT_DIFF, headSha: 'h1', draftEdits: { 0: { comment: '草稿', suggestion: '' } } });
+    const { store } = createMemoryStore([cached]);
+    const { result } = setup({ store, initialRawDiff: '', notes: [sharedNote({ ...SAMPLE_ANALYSIS_RESULT, headSha: 'h1' })] });
+    await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+    expect(store.put).not.toHaveBeenCalled();
+    expect(result.current.draftEdits).toEqual(cached.draftEdits);
   });
 
   it('抓取 MR 失敗時顯示 GitLab 錯誤', async () => {

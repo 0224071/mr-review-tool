@@ -69,7 +69,13 @@ export interface GitLabGateway {
   fetchNotes(target: PublishTarget): Promise<GitLabNote[]>;
   createNote(target: PublishTarget, body: string): Promise<unknown>;
   updateNote(target: PublishTarget, noteId: number, body: string): Promise<unknown>;
-  shareAnalysis(target: PublishTarget, result: MRAnalysisResult, targetNoteId: number | null): Promise<unknown>;
+  /** headSha：分析當時 MR 的 head sha，寫入分享標記供開啟時比對版本 */
+  shareAnalysis(
+    target: PublishTarget,
+    result: MRAnalysisResult,
+    targetNoteId: number | null,
+    headSha?: string | null
+  ): Promise<unknown>;
   publishBatch: PublishBatchFn;
 }
 

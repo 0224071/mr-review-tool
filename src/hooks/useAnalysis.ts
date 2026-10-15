@@ -34,10 +34,25 @@ import {
   GitLabNote,
   ReviewPublishState,
 } from '../types/gitlab';
-import { findSharedAnalysisInNotes, parseGitLabMrUrl } from '../services/gitlab-api';
+import {
+  findSharedAnalysisInNotes,
+  isSharedAnalysisCurrent,
+  parseGitLabMrUrl,
+  SharedAnalysis,
+} from '../services/gitlab-api';
 import type { AppServices } from '../app/app-services';
 import type { SettingsState } from './useSettings';
 import type { HistoryState } from './useHistory';
+
+/** 未載入的共享報告（分析版本與 MR 目前版本不符，或舊版標記沒有記錄分析版本） */
+export interface StaleSharedAnalysis {
+  author: string;
+  createdAt: string;
+  /** 報告分析時的 head sha；舊版標記為 null */
+  sharedHeadSha: string | null;
+  /** MR 目前的 head sha */
+  currentHeadSha: string | null;
+}
 
 export interface UseAnalysisOptions {
   services: Pick<AppServices, 'ai' | 'gitlab' | 'initialRawDiff'>;
@@ -72,12 +87,8 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
   const [isFetchingGitLab, setIsFetchingGitLab] = useState<boolean>(false);
   const [currentGitLabMr, setCurrentGitLabMr] = useState<GitLabMergeRequestInfo | null>(null);
   const [gitlabError, setGitlabError] = useState<string | null>(null);
-  const [sharedAnalysisAvailable, setSharedAnalysisAvailable] = useState<{
-    result: MRAnalysisResult;
-    noteId: number;
-    author: string;
-    createdAt: string;
-  } | null>(null);
+  /** MR 留言有共享報告，但分析版本與 MR 目前 head sha 不符（或舊版標記沒記錄）而未載入；左欄顯示提示卡片 */
+  const [staleSharedAnalysis, setStaleSharedAnalysis] = useState<StaleSharedAnalysis | null>(null);
 
   // Stage 2: Publishing & Discussion states（隨結果保存到歷史紀錄）
   const [publishStates, setPublishStates] = useState<Record<number, ReviewPublishState>>({});
@@ -142,7 +153,7 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
     setRawDiff('');
     setCurrentGitLabMr(null);
     setGitlabMrUrl('');
-    setSharedAnalysisAvailable(null);
+    setStaleSharedAnalysis(null);
   };
 
   /** 把一筆歷史紀錄套用到畫面（不呼叫 Gemini） */
@@ -172,7 +183,7 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
     setCurrentGitLabMr(record.mr ? (record.mr as GitLabMergeRequestInfo) : null);
     setGitlabMrUrl(record.mrUrl ?? '');
     setRemoteNotes([]);
-    setSharedAnalysisAvailable(null);
+    setStaleSharedAnalysis(null);
     setGitlabError(null);
   };
 
@@ -235,6 +246,7 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
     }
     applyRecord(record);
     if (!historyStore) setCurrentRecordId(null);
+    setStaleSharedAnalysis(null);
   };
 
   /** 402 額度不足後一鍵改用 OpenRouter 免費模型（使用者明確點選才切換，不自動 fallback） */
@@ -339,7 +351,7 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
   const handleFetchGitLabMr = async (url: string) => {
     setIsFetchingGitLab(true);
     setGitlabError(null);
-    setSharedAnalysisAvailable(null);
+    setStaleSharedAnalysis(null);
 
     try {
       const target = gitlab.resolveTarget(url, settings);
@@ -355,16 +367,26 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
 
       // 3. Check for previously shared analysis in notes（同時保留留言供重複發布比對）
       let notes: GitLabNote[] = [];
+      let shared: SharedAnalysis | null = null;
       try {
         notes = await gitlab.fetchNotes(target);
-        const shared = findSharedAnalysisInNotes(notes);
-        if (shared) {
-          setSharedAnalysisAvailable(shared);
-        }
+        shared = findSharedAnalysisInNotes(notes);
       } catch {
         // notes checking failure does not block diff fetching
       }
       setRemoteNotes(notes);
+
+      // 共享報告的分析版本與 MR 目前 head sha 不同（或舊版標記沒記錄）時不載入，只顯示提示卡片
+      const latestHead = mrInfo.diff_refs?.head_sha ?? null;
+      const sharedIsCurrent = !!shared && isSharedAnalysisCurrent(shared, latestHead);
+      if (shared && !sharedIsCurrent) {
+        setStaleSharedAnalysis({
+          author: shared.author,
+          createdAt: shared.createdAt,
+          sharedHeadSha: shared.headSha,
+          currentHeadSha: latestHead,
+        });
+      }
 
       // 4. 有快取就直接顯示，不呼叫 Gemini；切到沒有快取的 MR 時清掉前一個 MR 的結果
       // 快取依 MR + 目前所選 provider / model 查找
@@ -372,8 +394,11 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
       const cached = historyStore
         ? await findCachedRecord(historyStore, sourceKey, currentProviderModel).catch(() => undefined)
         : undefined;
-      if (cached) {
-        const latestHead = mrInfo.diff_refs?.head_sha ?? null;
+      const cachedIsCurrent = !!cached && !!latestHead && cached.headSha === latestHead;
+      if (shared && sharedIsCurrent && !cachedIsCurrent) {
+        // 5. 共享報告與 MR 目前版本相同：自動載入（不呼叫 AI）；本機已有同版本快取時以快取為準（保留草稿與發布紀錄）
+        await loadSharedAnalysis(shared, fetchedDiff, mrInfo, notes);
+      } else if (cached) {
         applyRecord(cached);
         if (latestHead && latestHead !== cached.latestHeadSha && historyStore) {
           await historyStore.update(cached.id, { latestHeadSha: latestHead }).catch(() => undefined);
@@ -401,16 +426,23 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
   };
 
   // Stage 2: Load shared analysis from MR note (Mechanism 1: Free of Gemini API key)
-  const handleLoadSharedAnalysis = async () => {
-    if (sharedAnalysisAvailable) {
-      const enrichedResult = {
-        ...sharedAnalysisAvailable.result,
-        groups: enrichGroupsWithParsedDiff(sharedAnalysisAvailable.result.groups, parsedDiff),
-        reviews: alignReviewsWithDiff(sharedAnalysisAvailable.result.reviews || [], parsedDiff),
-      };
-      setSharedAnalysisAvailable(null);
-      await commitNewResult(enrichedResult, rawDiff, currentGitLabMr, remoteNotes);
-    }
+  /** 載入與 MR 目前版本相同的共享報告：以剛抓到的 diff 對齊行號後當成新結果顯示並寫入歷史紀錄 */
+  const loadSharedAnalysis = async (
+    shared: SharedAnalysis,
+    diffText: string,
+    mr: GitLabMergeRequestInfo,
+    notes: GitLabNote[]
+  ) => {
+    const parsed = parseGitDiff(diffText);
+    const enrichedResult = {
+      ...shared.result,
+      groups: enrichGroupsWithParsedDiff(shared.result.groups, parsed),
+      reviews: alignReviewsWithDiff(shared.result.reviews || [], parsed),
+    };
+    await commitNewResult(enrichedResult, diffText, mr, notes);
+    setInfoMessage(
+      `已自動載入由 @${shared.author} 於 ${new Date(shared.createdAt).toLocaleDateString()} 共享的分析報告（與 MR 目前版本相同，未呼叫 AI）。`
+    );
   };
 
   const handleLoadSampleDiff = () => {
@@ -462,7 +494,7 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
     isFetchingGitLab,
     currentGitLabMr,
     gitlabError,
-    sharedAnalysisAvailable,
+    staleSharedAnalysis,
     publishStates,
     setPublishStates,
     isSummaryPublished,
@@ -486,7 +518,6 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
     handleAnalyze,
     handleReanalyze,
     handleFetchGitLabMr,
-    handleLoadSharedAnalysis,
     handleLoadSampleDiff,
     handleLoadSampleAnalysis,
     handleOpenFileDiff,
