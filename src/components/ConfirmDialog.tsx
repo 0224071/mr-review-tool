@@ -8,6 +8,9 @@ interface ConfirmDialogProps {
   confirmLabel: string;
   /** true：紅色（刪除）；false：橘色警告（重複發布） */
   danger?: boolean;
+  /** 次要動作（例如「仍要全部發布」），顯示在取消與主按鈕之間 */
+  secondaryLabel?: string;
+  onSecondary?: () => void;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -18,6 +21,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   body,
   confirmLabel,
   danger = false,
+  secondaryLabel,
+  onSecondary,
   onConfirm,
   onCancel,
 }) => {
@@ -52,6 +57,15 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           >
             取消
           </button>
+          {secondaryLabel && onSecondary && (
+            <button
+              type="button"
+              onClick={onSecondary}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark border border-surface-border hover:bg-surface-muted"
+            >
+              {secondaryLabel}
+            </button>
+          )}
           <button
             type="button"
             autoFocus

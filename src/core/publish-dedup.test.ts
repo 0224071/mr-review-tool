@@ -3,6 +3,7 @@ import {
   createPublishedRecord,
   defaultSelectedIndices,
   findPublishedMatches,
+  partitionDuplicates,
 } from './publish-dedup';
 import { MRReviewItem } from '../types/review';
 import { GitLabNote } from '../types/gitlab';
@@ -122,5 +123,33 @@ describe('defaultSelectedIndices', () => {
     const reviews = [review(), review({ lineVerified: false }), review({ comment: '另一則尚未發布的意見內容' })];
     const sel = defaultSelectedIndices(reviews, { 0: { source: 'local', publishedAt: NOW } });
     expect(Array.from(sel)).toEqual([2]);
+  });
+});
+
+describe('partitionDuplicates（重複發布阻擋）', () => {
+  const items = (reviews: MRReviewItem[]) => reviews.map((r, index) => ({ review: r, index }));
+
+  it('本地已發布的意見歸到 duplicates，其餘可發布', () => {
+    const reviews = [review(), review({ file: 'src/b.ts', comment: '另一則完全不同的意見內容' })];
+    const local = [createPublishedRecord(reviews[0], reviews[0].comment, reviews[0].suggestion, 'd1', NOW)];
+    const matches = findPublishedMatches(reviews, {}, local, []);
+    const { fresh, duplicates } = partitionDuplicates(items(reviews), matches);
+    expect(duplicates.map((i) => i.index)).toEqual([0]);
+    expect(fresh.map((i) => i.index)).toEqual([1]);
+  });
+
+  it('MR 上已有相同行內留言（沒有本地紀錄）也會被擋', () => {
+    const reviews = [review()];
+    const notes = [note({ body: `**[HIGH] BUG**: ${reviews[0].comment}`, position: { new_path: 'src/cart.ts', new_line: 10 } })];
+    const { fresh, duplicates } = partitionDuplicates(items(reviews), findPublishedMatches(reviews, {}, [], notes));
+    expect(fresh).toEqual([]);
+    expect(duplicates).toHaveLength(1);
+  });
+
+  it('同一則在清單中重複出現只保留一次', () => {
+    const list = [{ index: 2 }, { index: 2 }, { index: 4 }];
+    const { fresh, duplicates } = partitionDuplicates(list, {});
+    expect(fresh.map((i) => i.index)).toEqual([2, 4]);
+    expect(duplicates).toEqual([]);
   });
 });

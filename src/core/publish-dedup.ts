@@ -110,3 +110,21 @@ export function defaultSelectedIndices(
   });
   return next;
 }
+
+/**
+ * 發布前分流：已發布過（本地紀錄或 MR 留言）的歸到 duplicates；同一則重複出現只保留第一次。
+ */
+export function partitionDuplicates<T extends { index: number }>(
+  items: T[],
+  published: Record<number, PublishedMatch>
+): { fresh: T[]; duplicates: T[] } {
+  const seen = new Set<number>();
+  const fresh: T[] = [];
+  const duplicates: T[] = [];
+  for (const item of items) {
+    if (seen.has(item.index)) continue;
+    seen.add(item.index);
+    (published[item.index] ? duplicates : fresh).push(item);
+  }
+  return { fresh, duplicates };
+}

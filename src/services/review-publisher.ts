@@ -135,3 +135,47 @@ export async function publishReviewItem(
     };
   }
 }
+
+/** 發布前預估的發布方式（確認對話框顯示用）；實際發布時行內失敗仍可能改發一般留言 */
+export function plannedPublishMode(review: MRReviewItem, diffRefs: GitLabDiffRefs | undefined): 'inline' | 'general' {
+  if (review.lineVerified === false || !diffRefs) return 'general';
+  return buildDiscussionPosition(review, diffRefs) ? 'inline' : 'general';
+}
+
+export interface PublishBatchItem {
+  /** 意見在分析結果中的原始 index */
+  index: number;
+  review: MRReviewItem;
+  comment: string;
+  suggestion: string;
+}
+
+export type PublishItemOutcome =
+  | { index: number; ok: true; result: PublishReviewResult }
+  | { index: number; ok: false; error: string };
+
+/**
+ * 依序發布多則意見；單則失敗不中斷其餘，回傳每則結果。
+ * onStart / onDone 讓畫面即時更新每則狀態。
+ */
+export async function publishReviewBatch(
+  target: PublishTarget,
+  items: PublishBatchItem[],
+  diffRefs: GitLabDiffRefs | undefined,
+  hooks: { onStart?: (index: number) => void; onDone?: (outcome: PublishItemOutcome) => void } = {}
+): Promise<PublishItemOutcome[]> {
+  const outcomes: PublishItemOutcome[] = [];
+  for (const item of items) {
+    hooks.onStart?.(item.index);
+    let outcome: PublishItemOutcome;
+    try {
+      const result = await publishReviewItem(target, item.review, item.comment, item.suggestion, diffRefs);
+      outcome = { index: item.index, ok: true, result };
+    } catch (err) {
+      outcome = { index: item.index, ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    outcomes.push(outcome);
+    hooks.onDone?.(outcome);
+  }
+  return outcomes;
+}
