@@ -62,6 +62,8 @@ interface AnalysisResultViewProps {
   onPublishSummaryToMr?: () => void;
   onShareAnalysisToMr?: () => void;
   isSharingToMr?: boolean;
+  /** 共享分析前正在用 GET 讀取 MR 留言（尚未寫入）：發布按鈕顯示「讀取留言中」 */
+  isReadingShareNotes?: boolean;
   isSummaryPublished?: boolean;
   isSharedToMrPublished?: boolean;
   mrUrl?: string;
@@ -97,6 +99,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   onPublishSummaryToMr,
   onShareAnalysisToMr,
   isSharingToMr = false,
+  isReadingShareNotes = false,
   isSummaryPublished = false,
   isSharedToMrPublished = false,
   mrUrl = '',
@@ -416,8 +419,17 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
               onClick={() => setIsPublishMenuOpen(!isPublishMenuOpen)}
               className="flex items-center gap-1 px-3 py-1.5 bg-surface hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg font-medium transition-colors shadow-2xs"
             >
-              <Send className="w-3.5 h-3.5 text-gitlab" />
-              <span>發布至 MR ▾</span>
+              {isReadingShareNotes ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-slate-300 border-t-gitlab rounded-full animate-spin" />
+                  <span>讀取留言中...</span>
+                </>
+              ) : (
+                <>
+                  <Send className="w-3.5 h-3.5 text-gitlab" />
+                  <span>發布至 MR ▾</span>
+                </>
+              )}
             </button>
 
             {isPublishMenuOpen && (
@@ -456,7 +468,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                   className="w-full text-left p-2 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50 border-t border-slate-100"
                 >
                   <div className="font-semibold text-slate-800 flex items-center justify-between">
-                    <span>共享分析（免 Key 共享）</span>
+                    <span>{isReadingShareNotes ? '讀取留言中...' : '共享分析（免 Key 共享）'}</span>
                     {isSharedToMrPublished && (
                       <span className="text-[10px] text-emerald-600 font-bold">
                         {publishNotice ? `已共享（${publishNotice}）` : '已共享'}
@@ -773,7 +785,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                   onClick={() => setIsStickyMoreOpen(!isStickyMoreOpen)}
                   className="px-2.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 transition-colors"
                 >
-                  更多 ▾
+                  {isReadingShareNotes ? '讀取留言中...' : '更多 ▾'}
                 </button>
 
                 {isStickyMoreOpen && (
@@ -799,7 +811,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                       disabled={isSharingToMr || isSharedToMrPublished}
                       className="w-full text-left p-2 rounded-lg hover:bg-slate-700 transition-colors disabled:opacity-50 border-t border-slate-700"
                     >
-                      <div className="font-semibold">共享分析（免 Key 共享）</div>
+                      <div className="font-semibold">{isReadingShareNotes ? '讀取留言中...' : '共享分析（免 Key 共享）'}</div>
                       <p className="text-[10px] text-slate-400">隱藏標記回貼 MR 筆記</p>
                     </button>
                   </div>

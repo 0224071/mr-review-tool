@@ -224,6 +224,7 @@ export default function App({ services }: { services: AppServices }) {
                 onPublishSummaryToMr={publish.handlePublishSummaryToMr}
                 onShareAnalysisToMr={publish.handleShareAnalysisToMr}
                 isSharingToMr={publish.isSharingToMr}
+                isReadingShareNotes={publish.shareStage === 'reading'}
                 isSummaryPublished={analysis.isSummaryPublished}
                 isSharedToMrPublished={analysis.isSharedToMrPublished}
                 mrUrl={publish.mrUrl}

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SetStateAction } from 'react';
 import { actAsync, renderHook } from './test-utils';
-import { usePublish, UsePublishOptions, PublishItem } from './usePublish';
+import { buildNoteUrl, usePublish, UsePublishOptions, PublishItem } from './usePublish';
 import { DEFAULT_SETTINGS } from '../types/settings';
 import { SAMPLE_ANALYSIS_RESULT } from '../services/diff-sources/sample-analysis';
 import { createPublishedRecord } from '../core/publish-dedup';
@@ -270,6 +270,59 @@ describe('usePublish', () => {
     expect(result.current.shareConfirm).toBeNull();
     expect(state.error.box.value).toBe('讀取留言失敗 (500)');
     expect(gitlab.shareAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('分享分析報告：GET 讀留言期間為「讀取留言中」階段，按確認後寫入期間才是「寫入」階段', async () => {
+    const { result, gitlab } = setup();
+    let releaseNotes!: (notes: GitLabNote[]) => void;
+    vi.mocked(gitlab.fetchNotes).mockImplementationOnce(() => new Promise((r) => (releaseNotes = r)));
+    let reading!: Promise<void>;
+    await actAsync(() => {
+      reading = result.current.handleShareAnalysisToMr();
+    });
+    expect(result.current.shareStage).toBe('reading');
+    expect(result.current.isSharingToMr).toBe(true);
+    expect(gitlab.shareAnalysis).not.toHaveBeenCalled();
+
+    await actAsync(async () => {
+      releaseNotes([]);
+      await reading;
+    });
+    expect(result.current.shareStage).toBeNull();
+    expect(result.current.shareConfirm).not.toBeNull();
+
+    let releaseWrite!: () => void;
+    vi.mocked(gitlab.shareAnalysis).mockImplementationOnce(() => new Promise((r) => (releaseWrite = () => r({}))));
+    let writing!: Promise<void>;
+    await actAsync(() => {
+      writing = result.current.handleConfirmShareAnalysis();
+    });
+    expect(result.current.shareStage).toBe('writing');
+    await actAsync(async () => {
+      releaseWrite();
+      await writing;
+    });
+    expect(result.current.shareStage).toBeNull();
+  });
+
+  it('分享分析報告：覆寫時帶原留言作者 handle、發布時間與網址（MR 網址 + #note_<id>）', async () => {
+    const shared: GitLabNote = {
+      ...note(8, `${SHARED_TAG_START}\n{}\n${SHARED_TAG_END}`),
+      author: { id: 2, name: 'FAKE Name', username: 'fake-handle' },
+      created_at: '2026-10-01T08:00:00Z',
+    };
+    const { result } = setup({ notes: [shared] });
+    await actAsync(() => result.current.handleShareAnalysisToMr());
+    expect(result.current.shareConfirm).toMatchObject({
+      overwrite: 'shared',
+      overwriteAuthor: 'fake-handle',
+      overwriteCreatedAt: '2026-10-01T08:00:00Z',
+      overwriteNoteUrl: `${MR_URL}#note_8`,
+    });
+  });
+
+  it('buildNoteUrl：去掉 MR 網址既有的 # 後接 #note_<id>', () => {
+    expect(buildNoteUrl(`${MR_URL}#note_1`, 42)).toBe(`${MR_URL}#note_42`);
   });
 
   it('分享分析報告：沒有 MR 網址時顯示錯誤', async () => {

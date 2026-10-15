@@ -97,6 +97,9 @@ async function fetchMr(page: Page) {
   await expect(page.getByText(`!${MR_IID} · E2E 隱藏標記分享`)).toBeVisible();
 }
 
+// 留言時間 2026-10-01T08:00:00Z 在台北時區為 2026/10/1，固定時區讓日期斷言穩定
+test.use({timezoneId: 'Asia/Taipei'});
+
 const sharedCard = (page: Page) => page.getByText('已偵測到共享分析報告');
 const loadSharedButton = (page: Page) => page.getByRole('button', {name: '載入此共享報告'});
 /** 共享報告與 MR 目前版本不符、未載入時的提示卡片 */
@@ -165,9 +168,35 @@ test.describe('過期的隱藏標記', () => {
     await expect(page.getByText(RESULT_TITLE)).toHaveCount(0);
     // 只顯示過期提示，請使用者重新分析
     await expect(staleSharedCard(page)).toBeVisible();
-    await expect(staleSharedCard(page)).toContainText('需要重新分析');
+    await expect(staleSharedCard(page).getByRole('button', {name: '重新分析'})).toBeVisible();
     await expect(staleSharedCard(page)).toContainText(NEW_HEAD_SHA.slice(0, 8));
     await expect(page.getByRole('button', {name: '分析', exact: true})).toBeEnabled();
+    expect(aiCalls).toEqual([]);
+  });
+
+  test('過期卡片的「重新分析」按鈕走與「分析」相同的流程（無金鑰時開啟設定引導，不呼叫 AI）', async ({page}) => {
+    await mockSharedMr(page, {
+      headSha: NEW_HEAD_SHA,
+      notes: [note(sharedNoteBody({extra: {headSha: OLD_HEAD_SHA}}))],
+    });
+    await page.goto('/');
+    const aiCalls = trackAiRequests(page);
+    // 只填 GitLab Token、不填 AI 金鑰：按「分析」會開設定引導而不是送出 AI 請求
+    await page.getByRole('banner').getByRole('button', {name: '填寫金鑰'}).click();
+    await page.getByLabel('Personal Access Token (PAT)').fill('glpat-e2e-fake-token');
+    await page.getByRole('button', {name: '儲存設定'}).click();
+    await expect(page.getByRole('heading', {name: '偏好與整合設定'})).toBeHidden();
+
+    await fetchMr(page);
+    const card = staleSharedCard(page);
+    await expect(card).toContainText('這份報告分析完後，MR 又有新的 commit，內容可能已經不準');
+    await expect(card).toContainText('於 2026/10/1 發布');
+    const reanalyze = card.getByRole('button', {name: '重新分析'});
+    await expect(reanalyze).toBeEnabled();
+    await reanalyze.click();
+    // 與按「分析」相同：provider 未設定時顯示設定引導
+    await expect(page.getByRole('alert', {name: '尚未設定金鑰'})).toBeVisible();
+    await expect(page.getByText(RESULT_TITLE)).toHaveCount(0);
     expect(aiCalls).toEqual([]);
   });
 
@@ -217,11 +246,28 @@ test.describe('發布到 MR 前的確認', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     // MR 已有分享留言：說明會覆寫該留言
-    await expect(dialog).toContainText('將覆寫 MR 上既有的共享分析報告留言');
+    await expect(dialog).toContainText('會覆寫 @reviewer-bot 於 2026/10/1 發布的共享報告留言，不會另外新增留言');
     await expect(dialog.getByRole('button', {name: /確認共享（覆寫 1 則留言）/})).toBeVisible();
     await dialog.getByRole('button', {name: '取消'}).click();
     await expect(dialog).toBeHidden();
     await expect(page.getByText('已共享分析報告。')).toHaveCount(0);
+    expect(blockedRequests).toEqual([]);
+  });
+
+  test('覆寫確認視窗有「查看原留言」連結（新分頁開啟）與該留言發布日期', async ({page, blockedRequests}) => {
+    await openLoadedResult(page);
+    await page.getByRole('button', {name: '發布至 MR ▾'}).click();
+    await page.getByRole('button', {name: /共享分析（免 Key 共享）/}).first().click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('會在 MR 上留下一則留言，團隊成員都看得到');
+    const link = dialog.getByRole('link', {name: '查看原留言'});
+    await expect(link).toHaveAttribute('href', `${MR_URL}#note_501`);
+    await expect(link).toHaveAttribute('target', '_blank');
+    await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    await expect(dialog).toContainText('發布於 2026/10/1');
+    await dialog.getByRole('button', {name: '取消'}).click();
+    await expect(dialog).toBeHidden();
     expect(blockedRequests).toEqual([]);
   });
 
