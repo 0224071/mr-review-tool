@@ -9,6 +9,16 @@
 
 本工具**純前端**，沒有後端伺服器。瀏覽器直接呼叫 GitLab API 與你選的 AI 服務。
 
+## 最快試用
+
+不需要任何金鑰，也不需要 GitLab：
+
+```bash
+npm ci && npm run dev
+```
+
+啟動後開啟 <http://localhost:3000/?demo=1> 進入示範模式，已預先載入範例 diff，按「分析」就能看到範例結果（分析和發布都是模擬的，不會連到 AI 或 GitLab）。
+
 ## 需求
 
 - Node.js 22.12 以上（vitest 需要；CI 與部署都使用 Node 22）
