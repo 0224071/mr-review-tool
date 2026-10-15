@@ -69,6 +69,8 @@ interface AnalysisResultViewProps {
 
   // 快取與歷史紀錄
   publishedMatches?: Record<number, PublishedMatch>;
+  /** 一般模式：內文清空的意見就地提示並鎖住勾選、複製 */
+  blockEmptyComment?: boolean;
   analyzedAtLabel?: string;
   /** 產生結果的 provider / model 標記 */
   generatedByLabel?: string;
@@ -96,6 +98,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   draftEdits,
   onDraftEditsChange: setDraftEdits,
   publishedMatches = {},
+  blockEmptyComment = false,
   analyzedAtLabel,
   generatedByLabel,
   hasNewCommit = false,
@@ -510,6 +513,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
             onSelectIndicesChange={setSelectedIndices}
             draftEdits={draftEdits}
             onDraftEditsChange={setDraftEdits}
+            blockEmptyComment={blockEmptyComment}
           />
         </div>
       )}

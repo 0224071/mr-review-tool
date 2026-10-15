@@ -9,7 +9,7 @@ import {
   fetchGitLabMergeRequest,
   GitLabApiError,
 } from './gitlab-api';
-import { hasSuggestion } from '../core/review-text';
+import { EMPTY_COMMENT_MESSAGE, hasCommentText, hasSuggestion } from '../core/review-text';
 
 export interface PublishTarget {
   baseUrl: string;
@@ -91,6 +91,7 @@ async function fetchCurrentHeadSha(target: PublishTarget): Promise<string | unde
  * - lineVerified === false：不帶 position，以一般留言發出，開頭標「行號未驗證」。
  * - 其餘以行內留言發出；若失敗（400/500）且分析時的 head_sha 與 MR 目前 head_sha 不同，
  *   改發一般留言，開頭標「版本已更新」，並回傳改發原因。其他失敗照常拋錯。
+ * - 內文為空（或只有空白）時不送出，直接拋錯。
  */
 export async function publishReviewItem(
   target: PublishTarget,
@@ -100,6 +101,7 @@ export async function publishReviewItem(
   diffRefs: GitLabDiffRefs | undefined
 ): Promise<PublishReviewResult> {
   const { baseUrl, token, projectPath, mrIid } = target;
+  if (!hasCommentText(comment)) throw new Error(EMPTY_COMMENT_MESSAGE);
 
   if (review.lineVerified === false) {
     const res = await createGitLabGeneralDiscussion(

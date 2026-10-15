@@ -119,6 +119,23 @@ describe('發布紀錄格式一致（一般留言改走 /discussions）', () => 
   });
 });
 
+describe('重複發布比對先 trim 再比', () => {
+  it('本地紀錄：草稿只差前後空白視為重複', () => {
+    const r = review();
+    const rec = createPublishedRecord(r, r.comment, r.suggestion, 'd1', NOW);
+    const drafts = { 0: { comment: `  ${r.comment}\n`, suggestion: `\t${r.suggestion}  ` } };
+    expect(findPublishedMatches([review({ comment: '另一則 AI 原本的意見內容' })], drafts, [rec], [])).toEqual({
+      0: { source: 'local', publishedAt: NOW },
+    });
+  });
+
+  it('MR 留言：意見或留言只差前後空白視為重複', () => {
+    const r = review({ comment: `\n  ${review().comment}   ` });
+    const n = note({ body: `**[HIGH] BUG**: ${review().comment}  \n\n`, position: { new_path: 'src/cart.ts' } as GitLabNote['position'] });
+    expect(findPublishedMatches([r], {}, [], [n])[0]?.source).toBe('remote');
+  });
+});
+
 describe('defaultSelectedIndices', () => {
   it('預設全部不勾選（不論行號是否驗證、是否已發布）', () => {
     const reviews = [review(), review({ lineVerified: false }), review({ comment: '另一則尚未發布的意見內容' })];
