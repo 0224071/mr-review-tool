@@ -11,7 +11,7 @@
 
 ## 需求
 
-- Node.js 22（CI 與部署都使用 Node 22）
+- Node.js 22.12 以上（vitest 需要；CI 與部署都使用 Node 22）
 - npm（使用 `package-lock.json`）
 
 ## 本機執行
@@ -97,15 +97,18 @@ npm run preview                    # 本機預覽 build 結果
 
 ## 部署
 
+- 正式環境：GitHub Pages
+- PR 預覽：Vercel
+
 不論哪種部署方式，都不需要也不應該設定任何 API 金鑰環境變數；金鑰一律由使用者在 UI 中輸入。
 
-### GitHub Pages
+### GitHub Pages（正式環境）
 
 push 到 `main` 時由 GitHub Actions（`.github/workflows/deploy-pages.yml`）自動部署，build 時設 `GITHUB_PAGES=true`，base 路徑為 `/mr-review-tool/`。也可以在 Actions 頁面手動執行（workflow_dispatch）。
 
-### Vercel（預覽）
+### Vercel（PR 預覽）
 
-設定見 `vercel.json`（`npm run build`、輸出 `dist`）。base 為 `/`，**不要**設定 `GITHUB_PAGES`。
+用來產生 PR 的預覽網址，不是正式環境。設定見 `vercel.json`（`npm run build`、輸出 `dist`）。base 為 `/`，**不要**設定 `GITHUB_PAGES`。
 
 ## 常見錯誤排除
 
@@ -114,10 +117,10 @@ push 到 `main` 時由 GitHub Actions（`.github/workflows/deploy-pages.yml`）�
 `npm ci` 或 `npm run dev` 出現語法錯誤、套件要求的 engine 不符等訊息時，先確認版本：
 
 ```bash
-node -v   # 應為 v22.x
+node -v   # 應為 v22.12 以上
 ```
 
-可以用 nvm 等工具切換到 Node 22（例如 `nvm install 22 && nvm use 22`）。
+可以用 nvm 等工具切換到 Node 22.12 以上（例如 `nvm install 22 && nvm use 22`）。
 
 ### 3000 port 被占用
 

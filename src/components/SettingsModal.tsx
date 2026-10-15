@@ -463,7 +463,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     rel="noreferrer"
                     className="text-[11px] text-primary hover:text-primary-hover underline"
                   >
-                    前往 GitLab 產生 Token (需 api 權限)
+                    前往 GitLab 產生 Token
                   </a>
                 </div>
                 <input
@@ -480,6 +480,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 />
                 <p className="text-[11px] text-muted-light mt-1">
                   用於抓取私有 MR Diff、讀取共享分析筆記，以及直接將審查意見透過 Discussions API 發布至 MR。
+                </p>
+                <p className="text-[11px] text-muted-light mt-1">
+                  權限：只做分析給 <code>read_api</code> 即可；要把審查意見發布成 MR 留言才需要 <code>api</code>。
                 </p>
               </div>
 
