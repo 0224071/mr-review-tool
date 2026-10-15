@@ -63,13 +63,13 @@ function note(body: string) {
   };
 }
 
-/** 模擬此 MR 的 GET API，並記錄 MR 資訊被抓了幾次 */
+/** 模擬此 MR 的 GET API，並記錄 MR 資訊被抓了幾次；回傳物件的 headSha 每次請求時讀取，可改值模擬 MR 有新 commit */
 async function mockMr(page: Page, {headSha, notes}: {headSha: string; notes: unknown[]}) {
-  const counts = {mr: 0};
+  const counts = {mr: 0, headSha};
   await mockGitLabGet(page, (url) => {
     if (url.pathname === MR_API_PATH) {
       counts.mr += 1;
-      return {json: mrInfo(headSha)};
+      return {json: mrInfo(counts.headSha)};
     }
     if (url.pathname === `${MR_API_PATH}/raw_diffs`) return {text: SAMPLE_GIT_DIFF};
     if (url.pathname === `${MR_API_PATH}/notes`) return {json: notes};
@@ -174,6 +174,47 @@ async function staleCardLayout(card: Locator) {
       cardBottom: cardRect.bottom,
       cardContentWidth:
         cardRect.width -
+        parseFloat(style.paddingLeft) -
+        parseFloat(style.paddingRight) -
+        parseFloat(style.borderLeftWidth) -
+        parseFloat(style.borderRightWidth),
+    };
+  });
+}
+
+const newCommitBar = (page: Page) => page.getByRole('status').filter({hasText: '此 MR 在分析後有新的 commit'});
+
+/** 以模擬的 AI 分析出結果後，MR head 換成新的 commit 再抓取一次，回傳新 commit 提示列 */
+async function showNewCommitBar(page: Page) {
+  const mock = await mockMr(page, {headSha: OLD_HEAD_SHA, notes: []});
+  await mockGemini(page);
+  await page.goto('/');
+  await saveFakeSettings(page);
+  await fetchMr(page);
+  await page.getByRole('button', {name: '分析', exact: true}).click();
+  await expect(page.getByText(RESULT_TITLE).first()).toBeVisible();
+  mock.headSha = NEW_HEAD_SHA;
+  await page.getByRole('button', {name: '抓取', exact: true}).click();
+  const bar = newCommitBar(page);
+  await expect(bar).toBeVisible();
+  return bar;
+}
+
+/** 新 commit 提示列內文字與按鈕的位置，以及提示列內容寬度 */
+async function newCommitBarLayout(bar: Locator) {
+  return bar.evaluate((el) => {
+    const rect = (node: Element | null | undefined) => {
+      if (!node) throw new Error('找不到新 commit 提示列的區塊');
+      const r = node.getBoundingClientRect();
+      return {top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width};
+    };
+    const text = Array.from(el.children).find((c) => (c.textContent ?? '').includes('此 MR 在分析後有新的 commit'));
+    const style = getComputedStyle(el);
+    return {
+      text: rect(text),
+      button: rect(el.querySelector('button')),
+      contentWidth:
+        el.getBoundingClientRect().width -
         parseFloat(style.paddingLeft) -
         parseFloat(style.paddingRight) -
         parseFloat(style.borderLeftWidth) -
@@ -327,6 +368,18 @@ test.describe('390 寬度的斷行', () => {
     expect(blockedRequests).toEqual([]);
   });
 
+  test('新 commit 提示列：按鈕在文字之下獨立一列、接近全寬', async ({page, blockedRequests}) => {
+    const bar = await showNewCommitBar(page);
+    const button = bar.getByRole('button', {name: '抓最新內容重新分析', exact: true});
+    await expect(button).toBeVisible();
+    // 只有一顆按鈕：提示列中同名按鈕唯一
+    await expect(button).toHaveCount(1);
+    const layout = await newCommitBarLayout(bar);
+    expect(layout.button.top, '按鈕在文字之下').toBeGreaterThanOrEqual(layout.text.bottom);
+    expect(layout.button.width, '按鈕寬度接近提示列內容寬').toBeGreaterThanOrEqual(layout.contentWidth - 2);
+    expect(blockedRequests).toEqual([]);
+  });
+
   test('第一次共享（MR 上沒有既有留言）：確認視窗維持藍框，沒有黃框', async ({page, blockedRequests}) => {
     await mockMr(page, {headSha: OLD_HEAD_SHA, notes: []});
     await mockGemini(page);
@@ -367,6 +420,23 @@ test.describe('1440 寬度的過期卡片', () => {
     expect(layout.button.left, '按鈕在標題右側').toBeGreaterThanOrEqual(layout.title.left);
     expect(layout.button.bottom, '按鈕在作者／內文之上').toBeLessThanOrEqual(layout.body.top);
     expect(layout.button.width, '桌機按鈕不是全寬').toBeLessThan(layout.cardContentWidth * 0.8);
+    expect(blockedRequests).toEqual([]);
+  });
+});
+
+test.describe('1440 寬度的新 commit 提示列', () => {
+  test.use({viewport: {width: 1440, height: 900}});
+
+  test('按鈕與文字同列（y 範圍重疊），不是全寬', async ({page, blockedRequests}) => {
+    const bar = await showNewCommitBar(page);
+    const button = bar.getByRole('button', {name: '抓最新內容重新分析', exact: true});
+    await expect(button).toBeVisible();
+    await expect(button).toHaveCount(1);
+    const layout = await newCommitBarLayout(bar);
+    expect(layout.button.top, '按鈕與文字的 y 範圍重疊').toBeLessThan(layout.text.bottom);
+    expect(layout.text.top).toBeLessThan(layout.button.bottom);
+    expect(layout.button.left, '按鈕在文字右側').toBeGreaterThanOrEqual(layout.text.right);
+    expect(layout.button.width, '桌機按鈕不是全寬').toBeLessThan(layout.contentWidth * 0.8);
     expect(blockedRequests).toEqual([]);
   });
 });
