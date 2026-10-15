@@ -183,7 +183,8 @@ describe('useAnalysis', () => {
     expect(result.current.analysisResult).not.toHaveProperty('headSha');
     expect(result.current.resultDiffRefs).toEqual(MR.diff_refs);
     expect(result.current.staleSharedAnalysis).toBeNull();
-    expect(result.current.infoMessage).toContain('@Ann');
+    expect(result.current.infoMessage).toContain('由 Ann（@ann） 於');
+    expect(result.current.infoMessage).not.toContain('@Ann');
     expect(store.put).toHaveBeenCalledWith(expect.objectContaining({ headSha: 'h1' }), expect.any(Number));
   });
 
@@ -195,7 +196,7 @@ describe('useAnalysis', () => {
     expect(result.current.analysisResult).toBeNull();
     expect(store.put).not.toHaveBeenCalled();
     expect(result.current.staleSharedAnalysis).toEqual({
-      author: 'Ann',
+      author: { name: 'Ann', username: 'ann' },
       createdAt: '2026-01-01T00:00:00Z',
       sharedHeadSha: 'FAKE-old-head',
       currentHeadSha: 'h1',
@@ -403,6 +404,242 @@ describe('useAnalysis', () => {
       published: [],
       summaryPublished: false,
       sharedPublished: false,
+    });
+  });
+});
+
+describe('分析流程穩定性（#71）', () => {
+  function gate<T = void>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  const MR_A = { ...MR, web_url: 'https://gitlab.example.com/grp/proj/-/merge_requests/1', iid: 1, title: 'FAKE-MR-A', diff_refs: { base_sha: 'b', start_sha: 's', head_sha: 'FAKE-head-a' } } as GitLabMergeRequestInfo;
+  const MR_B = { ...MR, web_url: 'https://gitlab.example.com/grp/proj/-/merge_requests/2', iid: 2, title: 'FAKE-MR-B', diff_refs: { base_sha: 'b', start_sha: 's', head_sha: 'FAKE-head-b' } } as GitLabMergeRequestInfo;
+  const DIFF_B = 'diff --git a/FAKE-b.ts b/FAKE-b.ts\n--- a/FAKE-b.ts\n+++ b/FAKE-b.ts\n@@ -1 +1 @@\n-old\n+new\n';
+  const RESULT_A: MRAnalysisResult = { ...RESULT, title: 'FAKE-RESULT-A' };
+
+  /** GitLab 依網址結尾的 iid 回 MR A 或 B */
+  function setupAB(store: HistoryStore | null = null) {
+    const ctx = setup({ store, initialRawDiff: '' });
+    vi.mocked(ctx.gitlab.resolveTarget).mockImplementation(((url: string) => ({
+      baseUrl: 'https://gitlab.example.com',
+      token: 't',
+      projectPath: 'grp/proj',
+      mrIid: url.endsWith('/1') ? 1 : 2,
+    })) as never);
+    vi.mocked(ctx.gitlab.fetchMergeRequest).mockImplementation((async (t: { mrIid: number }) =>
+      t.mrIid === 1 ? MR_A : MR_B) as never);
+    vi.mocked(ctx.gitlab.fetchRawDiff).mockImplementation((async (t: { mrIid: number }) =>
+      t.mrIid === 1 ? SAMPLE_GIT_DIFF : DIFF_B) as never);
+    return ctx;
+  }
+
+  describe('分析進行中擋住重複觸發', () => {
+    it('讀快取的空檔連點兩下「分析」：AI 只被呼叫一次', async () => {
+      analyzeGitDiff.mockResolvedValue(RESULT);
+      const { store } = createMemoryStore();
+      const cacheRead = gate<undefined>();
+      store.get.mockImplementation(() => cacheRead.promise);
+      const { result } = setup({ store });
+
+      let first!: Promise<void>;
+      let second!: Promise<void>;
+      await actAsync(() => {
+        first = result.current.handleAnalyze();
+        second = result.current.handleAnalyze();
+      });
+      // 第二次在讀快取時就被擋下，連快取都不會再讀
+      expect(store.get).toHaveBeenCalledTimes(1);
+      await actAsync(async () => {
+        store.get.mockResolvedValue(undefined);
+        cacheRead.resolve(undefined);
+        await Promise.all([first, second]);
+      });
+      expect(analyzeGitDiff).toHaveBeenCalledTimes(1);
+      expect(result.current.analysisResult?.title).toBe(RESULT.title);
+    });
+
+    it('AI 分析中再按「分析」不會再呼叫；分析結束後可以再分析', async () => {
+      const ai = gate<MRAnalysisResult>();
+      analyzeGitDiff.mockImplementationOnce(() => ai.promise);
+      const { result } = setup();
+      let first!: Promise<void>;
+      await actAsync(() => {
+        first = result.current.handleAnalyze();
+      });
+      expect(result.current.isLoading).toBe(true);
+      await actAsync(() => result.current.handleAnalyze());
+      await actAsync(() => result.current.handleReanalyze());
+      expect(analyzeGitDiff).toHaveBeenCalledTimes(1);
+
+      await actAsync(async () => {
+        ai.resolve(RESULT);
+        await first;
+      });
+      expect(result.current.isLoading).toBe(false);
+      analyzeGitDiff.mockResolvedValueOnce(RESULT);
+      await actAsync(() => result.current.handleAnalyze());
+      expect(analyzeGitDiff).toHaveBeenCalledTimes(2);
+    });
+
+    it('連點「重新分析」：只重新抓一次 MR、只呼叫 AI 一次', async () => {
+      analyzeGitDiff.mockResolvedValue(RESULT);
+      const { result, gitlab } = setup({ initialRawDiff: '' });
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+      vi.mocked(gitlab.fetchMergeRequest).mockClear();
+      await actAsync(() => Promise.all([result.current.handleReanalyze(), result.current.handleReanalyze()]));
+      expect(gitlab.fetchMergeRequest).toHaveBeenCalledTimes(1);
+      expect(analyzeGitDiff).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('AI 分析結果的序號保護：分析中切換 MR', () => {
+    it('分析 A 時切到 B，A 的結果較晚回來：不寫到 B 的畫面，只存進歷史紀錄', async () => {
+      const aiA = gate<MRAnalysisResult>();
+      analyzeGitDiff.mockImplementationOnce(() => aiA.promise);
+      const { store } = createMemoryStore();
+      const { result } = setupAB(store);
+
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_A.web_url));
+      expect(result.current.currentGitLabMr).toBe(MR_A);
+      let analyzeA!: Promise<void>;
+      await actAsync(() => {
+        analyzeA = result.current.handleAnalyze();
+      });
+      expect(result.current.isLoading).toBe(true);
+
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_B.web_url));
+      expect(result.current.currentGitLabMr).toBe(MR_B);
+      // 切到 B 後畫面不再顯示 A 的分析中狀態
+      expect(result.current.isLoading).toBe(false);
+
+      await actAsync(async () => {
+        aiA.resolve(RESULT_A);
+        await analyzeA;
+      });
+      expect(result.current.currentGitLabMr).toBe(MR_B);
+      expect(result.current.rawDiff).toBe(DIFF_B);
+      expect(result.current.analysisResult).toBeNull();
+      expect(result.current.resultDiffRefs).toBeUndefined();
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.errorMessage).toBeNull();
+      // A 的結果仍寫入 A 的歷史紀錄，之後開 A 可直接看到
+      expect(store.put).toHaveBeenCalledWith(
+        expect.objectContaining({ mrUrl: MR_A.web_url, result: expect.objectContaining({ title: RESULT_A.title }) }),
+        expect.any(Number)
+      );
+    });
+
+    it('分析 A 時切到 B，A 較晚失敗：錯誤不顯示在 B 的畫面', async () => {
+      const aiA = gate<MRAnalysisResult>();
+      analyzeGitDiff.mockImplementationOnce(() => aiA.promise);
+      const { result } = setupAB();
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_A.web_url));
+      let analyzeA!: Promise<void>;
+      await actAsync(() => {
+        analyzeA = result.current.handleAnalyze();
+      });
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_B.web_url));
+      await actAsync(async () => {
+        aiA.reject(new Error('FAKE-A-failed'));
+        await analyzeA;
+      });
+      expect(result.current.errorMessage).toBeNull();
+      expect(result.current.currentGitLabMr).toBe(MR_B);
+    });
+
+    it('切到 B 後可以馬上分析 B（不被 A 擋住）；A 較晚回來不蓋掉 B 的結果', async () => {
+      const aiA = gate<MRAnalysisResult>();
+      analyzeGitDiff.mockImplementationOnce(() => aiA.promise);
+      const { result } = setupAB();
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_A.web_url));
+      let analyzeA!: Promise<void>;
+      await actAsync(() => {
+        analyzeA = result.current.handleAnalyze();
+      });
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_B.web_url));
+
+      const RESULT_B: MRAnalysisResult = { ...RESULT, title: 'FAKE-RESULT-B' };
+      analyzeGitDiff.mockResolvedValueOnce(RESULT_B);
+      await actAsync(() => result.current.handleAnalyze());
+      expect(analyzeGitDiff).toHaveBeenCalledTimes(2);
+      expect(analyzeGitDiff).toHaveBeenLastCalledWith(expect.objectContaining({ rawDiff: DIFF_B }));
+      expect(result.current.analysisResult?.title).toBe('FAKE-RESULT-B');
+
+      await actAsync(async () => {
+        aiA.resolve(RESULT_A);
+        await analyzeA;
+      });
+      expect(result.current.analysisResult?.title).toBe('FAKE-RESULT-B');
+      expect(result.current.resultDiffRefs).toEqual(MR_B.diff_refs);
+    });
+
+    it('「重新分析」的 AI 分析中切到 B：A 的結果不寫到 B 的畫面', async () => {
+      const aiA = gate<MRAnalysisResult>();
+      analyzeGitDiff.mockImplementationOnce(() => aiA.promise);
+      const { result } = setupAB();
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_A.web_url));
+      let reanalyzeA!: Promise<void>;
+      await actAsync(() => {
+        reanalyzeA = result.current.handleReanalyze();
+      });
+      expect(analyzeGitDiff).toHaveBeenCalledTimes(1);
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_B.web_url));
+      await actAsync(async () => {
+        aiA.resolve(RESULT_A);
+        await reanalyzeA;
+      });
+      expect(result.current.currentGitLabMr).toBe(MR_B);
+      expect(result.current.analysisResult).toBeNull();
+    });
+  });
+
+  describe('「重新分析」先重新抓 MR 再分析', () => {
+    it('重新抓 MR 與 diff，以最新的 diff 與 MR 呼叫 AI', async () => {
+      analyzeGitDiff.mockResolvedValue(RESULT);
+      const { result, gitlab } = setup({ initialRawDiff: '' });
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+      const LATEST_MR = { ...MR, diff_refs: { base_sha: 'b', start_sha: 's', head_sha: 'FAKE-head-latest' } } as GitLabMergeRequestInfo;
+      vi.mocked(gitlab.fetchMergeRequest).mockResolvedValueOnce(LATEST_MR);
+      vi.mocked(gitlab.fetchRawDiff).mockResolvedValueOnce(DIFF_B);
+
+      await actAsync(() => result.current.handleReanalyze());
+      expect(gitlab.fetchMergeRequest).toHaveBeenCalledTimes(2);
+      expect(gitlab.fetchRawDiff).toHaveBeenCalledTimes(2);
+      expect(analyzeGitDiff).toHaveBeenCalledTimes(1);
+      expect(analyzeGitDiff).toHaveBeenCalledWith(expect.objectContaining({ rawDiff: DIFF_B }));
+      expect(result.current.currentGitLabMr).toBe(LATEST_MR);
+      expect(result.current.rawDiff).toBe(DIFF_B);
+      expect(result.current.resultDiffRefs).toEqual(LATEST_MR.diff_refs);
+    });
+
+    it('過期共享報告的提示在重新分析出結果後消失', async () => {
+      analyzeGitDiff.mockResolvedValue(RESULT);
+      const { result } = setup({ initialRawDiff: '', notes: [sharedNote({ ...SAMPLE_ANALYSIS_RESULT, headSha: 'FAKE-old-head' })] });
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+      expect(result.current.staleSharedAnalysis).not.toBeNull();
+      await actAsync(() => result.current.handleReanalyze());
+      expect(result.current.analysisResult?.title).toBe(RESULT.title);
+      expect(result.current.staleSharedAnalysis).toBeNull();
+    });
+
+    it('重新抓 MR 失敗時顯示 GitLab 錯誤，不呼叫 AI', async () => {
+      const { result, gitlab } = setup({ initialRawDiff: '' });
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+      vi.mocked(gitlab.fetchMergeRequest).mockRejectedValueOnce(new Error('FAKE-401'));
+      await actAsync(() => result.current.handleReanalyze());
+      expect(result.current.gitlabError).toBe('FAKE-401');
+      expect(analyzeGitDiff).not.toHaveBeenCalled();
+      // 失敗後可以再試
+      analyzeGitDiff.mockResolvedValueOnce(RESULT);
+      await actAsync(() => result.current.handleReanalyze());
+      expect(analyzeGitDiff).toHaveBeenCalledTimes(1);
     });
   });
 });

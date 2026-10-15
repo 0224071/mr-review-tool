@@ -1,4 +1,5 @@
 import {
+  GitLabAuthor,
   GitLabCreateDiscussionPayload,
   GitLabMergeRequestInfo,
   GitLabNote,
@@ -6,6 +7,7 @@ import {
 } from '../types/gitlab';
 import { MRAnalysisResult } from '../types/review';
 import { getMixedContentWarning } from '../core/mixed-content';
+import { normalizeResultReviews } from '../core/review-category';
 
 export const SHARED_TAG_START = '<!-- GITLAB_MR_REVIEWER_START v=1 -->';
 export const SHARED_TAG_END = '<!-- GITLAB_MR_REVIEWER_END -->';
@@ -251,7 +253,7 @@ export async function fetchGitLabMrNotes(
 export interface SharedAnalysis {
   result: MRAnalysisResult;
   noteId: number;
-  author: string;
+  author: GitLabAuthor;
   createdAt: string;
   /** 分析當時 MR 的 diff_refs.head_sha；舊版標記沒有此欄位時為 null */
   headSha: string | null;
@@ -260,6 +262,7 @@ export interface SharedAnalysis {
 /**
  * Looks for embedded shared MR analysis JSON within MR notes
  * 標記 JSON 的 headSha 為分析時的 head sha，不屬於分析結果本身，會從 result 中拿掉。
+ * 作者同時保留顯示名稱與 username，畫面上以「名稱 @username」呈現。
  */
 export function findSharedAnalysisInNotes(notes: GitLabNote[]): SharedAnalysis | null {
   for (const note of notes) {
@@ -277,9 +280,10 @@ export function findSharedAnalysisInNotes(notes: GitLabNote[]): SharedAnalysis |
           if (parsed && parsed.schemaVersion === 1 && parsed.title && parsed.groups) {
             const { headSha, ...result } = parsed;
             return {
-              result,
+              // 留言任何人都能寫：不認得的 category／severity 改成預設值，避免畫面查不到對應樣式而白掉
+              result: normalizeResultReviews(result),
               noteId: note.id,
-              author: note.author.name || note.author.username,
+              author: { name: note.author.name ?? '', username: note.author.username ?? '' },
               createdAt: note.created_at,
               headSha: typeof headSha === 'string' && headSha ? headSha : null,
             };

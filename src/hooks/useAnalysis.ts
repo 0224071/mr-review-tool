@@ -29,6 +29,7 @@ import { SAMPLE_ANALYSIS_RESULT } from '../services/diff-sources/sample-analysis
 import { MRAnalysisResult } from '../types/review';
 import { DiffFile } from '../types/diff';
 import {
+  GitLabAuthor,
   GitLabDiffRefs,
   GitLabMergeRequestInfo,
   GitLabNote,
@@ -44,10 +45,12 @@ import type { AppServices } from '../app/app-services';
 import type { SettingsState } from './useSettings';
 import type { HistoryState } from './useHistory';
 import { formatYmd } from '../core/date-format';
+import { formatAuthorText } from '../core/author-format';
+import { normalizeResultReviews } from '../core/review-category';
 
 /** 未載入的共享報告（分析版本與 MR 目前版本不符，或舊版標記沒有記錄分析版本） */
 export interface StaleSharedAnalysis {
-  author: string;
+  author: GitLabAuthor;
   createdAt: string;
   /** 報告分析時的 head sha；舊版標記為 null */
   sharedHeadSha: string | null;
@@ -91,14 +94,37 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
   /** MR 留言有共享報告，但分析版本與 MR 目前 head sha 不符（或舊版標記沒記錄）而未載入；左欄顯示提示卡片 */
   const [staleSharedAnalysis, setStaleSharedAnalysis] = useState<StaleSharedAnalysis | null>(null);
   /**
-   * 抓取 MR 的請求序號：每次抓取（或改看其他來源）都 +1，回應回來時序號已不是最新就整個丟掉，
-   * 避免切換 MR 時較慢回來的舊請求蓋掉新 MR 的畫面。
+   * 來源序號：每次抓取 MR（或改看其他來源）都 +1。抓取的回應與 AI 分析的結果回來時，
+   * 序號已不是最新就不套用到畫面，避免切換 MR 時較慢回來的舊請求或舊分析蓋掉新 MR 的畫面。
    */
   const fetchSeqRef = useRef(0);
+  /**
+   * 進行中的分析（含讀快取的空檔）所屬的來源序號；null 表示沒有分析在跑。
+   * 用 ref 同步擋住重複觸發：連點「分析」時第二次在 state 更新前就會被擋下。
+   */
+  const analysisSeqRef = useRef<number | null>(null);
+  /** 改看其他來源：序號 +1；進行中的分析改為背景完成（只寫入歷史紀錄），畫面結束分析中的狀態 */
+  const bumpSourceSeq = () => {
+    fetchSeqRef.current += 1;
+    if (analysisSeqRef.current !== null) {
+      analysisSeqRef.current = null;
+      setIsLoading(false);
+      setBatchProgress(null);
+    }
+    return fetchSeqRef.current;
+  };
   /** 讓進行中的抓取作廢，並結束抓取中的狀態 */
   const cancelPendingFetch = () => {
-    fetchSeqRef.current += 1;
+    bumpSourceSeq();
     setIsFetchingGitLab(false);
+  };
+  /** 分析開始時佔用（已有分析在跑就回傳 false）；回傳的 release 只釋放自己那次 */
+  const claimAnalysis = (seq: number) => {
+    if (analysisSeqRef.current !== null) return null;
+    analysisSeqRef.current = seq;
+    return () => {
+      if (analysisSeqRef.current === seq) analysisSeqRef.current = null;
+    };
   };
 
   // Stage 2: Publishing & Discussion states（隨結果保存到歷史紀錄）
@@ -168,12 +194,16 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
     setStaleSharedAnalysis(null);
   };
 
-  /** 把一筆歷史紀錄套用到畫面（不呼叫 Gemini） */
+  /**
+   * 把一筆歷史紀錄套用到畫面（不呼叫 Gemini）。歷史紀錄與快取可能是舊版或被竄改的資料，
+   * 先正規化 category／severity，避免畫面查不到對應的圖示或樣式而整頁白掉。
+   */
   const applyRecord = (record: HistoryRecord) => {
+    const result = normalizeResultReviews(record.result);
     setAnalysisResult(
       record.rawDiff
-        ? { ...record.result, reviews: dropUnverifiedFallbackLines(record.result.reviews, parseGitDiff(record.rawDiff)) }
-        : record.result
+        ? { ...result, reviews: dropUnverifiedFallbackLines(result.reviews, parseGitDiff(record.rawDiff)) }
+        : result
     );
     setCurrentRecordId(record.id);
     setAnalyzedAt(record.analyzedAt);
@@ -272,11 +302,16 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
     setInfoMessage(`已改用 OpenRouter 免費模型 ${OPENROUTER_SUGGESTED_FREE_MODEL}，請再按一次「分析」。免費模型有請求次數上限。`);
   };
 
-  const runAnalysis = async (diffText: string, mr: GitLabMergeRequestInfo | null) => {
+  /**
+   * 呼叫 AI 分析 diffText。seq 為分析開始時的來源序號：結果回來時已切到其他來源（序號不同），
+   * 結果只寫入歷史紀錄、不套用到畫面，錯誤也不顯示（與 #67 抓取 MR 的序號保護相同）。
+   */
+  const runAnalysis = async (diffText: string, mr: GitLabMergeRequestInfo | null, seq: number) => {
     if (!providerReady) {
       setIsSetupGuideOpen(true);
       return;
     }
+    const isStale = () => seq !== fetchSeqRef.current;
 
     setIsSetupGuideOpen(false);
     setIsLoading(true);
@@ -285,58 +320,82 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
 
     try {
       const provider = ai.createProvider(settings);
-      const result = await analyzeGitDiff({
+      const aiResult = await analyzeGitDiff({
         rawDiff: diffText,
         provider,
         teamRules: settings.teamRules,
         onBatchProgress: (current, total) => {
-          setBatchProgress({ current, total });
+          if (!isStale()) setBatchProgress({ current, total });
         },
       });
-      await commitNewResult(result, diffText, mr, remoteNotes);
+      // AI 回傳的 category／severity 不一定在認得的範圍內，寫入歷史紀錄前先正規化
+      await commitNewResult(normalizeResultReviews(aiResult), diffText, mr, remoteNotes, isStale);
     } catch (err: unknown) {
+      if (isStale()) return;
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMessage(msg);
       setFreeModelSuggestedFor(
         shouldSuggestFreeModel(err, settings.llmProvider, getProviderSettings(settings).model) ? msg : null
       );
     } finally {
-      setIsLoading(false);
-      setBatchProgress(null);
-    }
-  };
-
-  const handleAnalyze = async () => {
-    // 有快取（且不是正在顯示的那筆）就直接顯示，不呼叫 Gemini；
-    // 正在顯示的紀錄再按「分析」視為使用者要求重新分析（保留已發布紀錄）。
-    if (historyStore && rawDiff.trim()) {
-      const source = describeSource(rawDiff, currentGitLabMr);
-      try {
-        const cached = await findCachedRecord(historyStore, source.id, currentProviderModel);
-        if (
-          cached &&
-          shouldServeFromCache({
-            sourceId: cached.id,
-            currentRecordId,
-            cached,
-            currentHeadSha: currentGitLabMr?.diff_refs?.head_sha,
-          })
-        ) {
-          applyRecord(cached);
-          return;
-        }
-      } catch {
-        // 讀取失敗就照常分析
+      if (!isStale()) {
+        setIsLoading(false);
+        setBatchProgress(null);
       }
     }
-    await runAnalysis(rawDiff, currentGitLabMr);
   };
 
-  /** 新 commit 提示列的「重新分析」：先抓最新 MR 與 diff，再分析 */
+  /** 「分析」：分析進行中（含讀快取的空檔）再按會被擋下，連點只會呼叫 AI 一次 */
+  const handleAnalyze = async () => {
+    const seq = fetchSeqRef.current;
+    const release = claimAnalysis(seq);
+    if (!release) return;
+    try {
+      // 有快取（且不是正在顯示的那筆）就直接顯示，不呼叫 Gemini；
+      // 正在顯示的紀錄再按「分析」視為使用者要求重新分析（保留已發布紀錄）。
+      if (historyStore && rawDiff.trim()) {
+        const source = describeSource(rawDiff, currentGitLabMr);
+        try {
+          const cached = await findCachedRecord(historyStore, source.id, currentProviderModel);
+          if (seq !== fetchSeqRef.current) return;
+          if (
+            cached &&
+            shouldServeFromCache({
+              sourceId: cached.id,
+              currentRecordId,
+              cached,
+              currentHeadSha: currentGitLabMr?.diff_refs?.head_sha,
+            })
+          ) {
+            applyRecord(cached);
+            return;
+          }
+        } catch {
+          // 讀取失敗就照常分析
+        }
+      }
+      await runAnalysis(rawDiff, currentGitLabMr, seq);
+    } finally {
+      release();
+    }
+  };
+
+  /**
+   * 「重新分析」（新 commit 提示列與過期共享報告卡片共用）：先重新抓最新 MR 與 diff，再呼叫 AI 分析。
+   * 沒有 MR（手動貼上的 diff）時直接分析左欄的 diff。
+   */
   const handleReanalyze = async () => {
+    if (analysisSeqRef.current !== null) return;
     const mrUrl = currentGitLabMr?.web_url;
     if (!mrUrl) {
-      await runAnalysis(rawDiff, currentGitLabMr);
+      const seq = fetchSeqRef.current;
+      const release = claimAnalysis(seq);
+      if (!release) return;
+      try {
+        await runAnalysis(rawDiff, currentGitLabMr, seq);
+      } finally {
+        release();
+      }
       return;
     }
     if (!providerReady) {
@@ -344,33 +403,39 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
       return;
     }
     // 重新抓取目前 MR 也算一次抓取：進行中的其他抓取作廢；抓取期間又切到其他 MR 時不再分析
-    const seq = ++fetchSeqRef.current;
+    const seq = bumpSourceSeq();
+    const release = claimAnalysis(seq);
+    if (!release) return;
     const isStale = () => seq !== fetchSeqRef.current;
-    setIsFetchingGitLab(true);
-    setGitlabError(null);
-    let latestMr: GitLabMergeRequestInfo;
-    let latestDiff: string;
     try {
-      const target = gitlab.resolveTarget(mrUrl, settings);
-      latestMr = await gitlab.fetchMergeRequest(target);
-      latestDiff = await gitlab.fetchRawDiff(target);
-      if (isStale()) return;
-      setCurrentGitLabMr(latestMr);
-      setGitlabMrUrl(latestMr.web_url);
-      setRawDiff(latestDiff);
-    } catch (err: unknown) {
-      if (!isStale()) setGitlabError(err instanceof Error ? err.message : String(err));
-      return;
+      setIsFetchingGitLab(true);
+      setGitlabError(null);
+      let latestMr: GitLabMergeRequestInfo;
+      let latestDiff: string;
+      try {
+        const target = gitlab.resolveTarget(mrUrl, settings);
+        latestMr = await gitlab.fetchMergeRequest(target);
+        latestDiff = await gitlab.fetchRawDiff(target);
+        if (isStale()) return;
+        setCurrentGitLabMr(latestMr);
+        setGitlabMrUrl(latestMr.web_url);
+        setRawDiff(latestDiff);
+      } catch (err: unknown) {
+        if (!isStale()) setGitlabError(err instanceof Error ? err.message : String(err));
+        return;
+      } finally {
+        if (!isStale()) setIsFetchingGitLab(false);
+      }
+      await runAnalysis(latestDiff, latestMr, seq);
     } finally {
-      if (!isStale()) setIsFetchingGitLab(false);
+      release();
     }
-    await runAnalysis(latestDiff, latestMr);
   };
 
   // Stage 2: Fetch MR and Notes from GitLab
   /** 抓取 MR、diff 與留言；只套用最新一次抓取的回應（含自動載入共享結果、錯誤與 loading 狀態） */
   const handleFetchGitLabMr = async (url: string) => {
-    const seq = ++fetchSeqRef.current;
+    const seq = bumpSourceSeq();
     const isStale = () => seq !== fetchSeqRef.current;
     setIsFetchingGitLab(true);
     setGitlabError(null);
@@ -471,17 +536,19 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
     await commitNewResult(enrichedResult, diffText, mr, notes, isStale);
     if (isStale()) return;
     setInfoMessage(
-      `已自動載入由 @${shared.author} 於 ${formatYmd(shared.createdAt)} 共享的分析報告（與 MR 目前版本相同，未呼叫 AI）。`
+      `已自動載入由 ${formatAuthorText(shared.author)} 於 ${formatYmd(shared.createdAt)} 共享的分析報告（與 MR 目前版本相同，未呼叫 AI）。`
     );
   };
 
   const handleLoadSampleDiff = () => {
+    cancelPendingFetch();
     setRawDiff(SAMPLE_GIT_DIFF);
     setCurrentGitLabMr(null);
     setGitlabMrUrl('');
   };
 
   const handleLoadSampleAnalysis = () => {
+    cancelPendingFetch();
     setRawDiff(SAMPLE_GIT_DIFF);
     const parsed = parseGitDiff(SAMPLE_GIT_DIFF);
     setAnalysisResult({

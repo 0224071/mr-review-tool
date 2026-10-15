@@ -19,12 +19,15 @@ import type { StaleSharedAnalysis } from '../hooks/useAnalysis';
 import { GitLabMergeRequestInfo } from '../types/gitlab';
 import { getMixedContentWarning } from '../core/mixed-content';
 import { formatYmd } from '../core/date-format';
+import { AuthorName } from './AuthorName';
 
 interface DiffInputPanelProps {
   rawDiff: string;
   onDiffChange: (diff: string) => void;
   parsedDiff: ParsedDiff;
   onAnalyze: () => void;
+  /** 過期共享報告卡片的「抓最新內容重新分析」：先重新抓 MR 再分析（與新 commit 提示列相同） */
+  onReanalyze: () => void;
   onLoadSampleDiff: () => void;
   onLoadSampleAnalysis: () => void;
   isLoading: boolean;
@@ -53,6 +56,7 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
   onDiffChange,
   parsedDiff,
   onAnalyze,
+  onReanalyze,
   onLoadSampleDiff,
   isLoading,
   setupNotice,
@@ -257,40 +261,48 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
             {staleSharedAnalysis && (
               <div
                 role="status"
-                className="p-2.5 bg-warning-subtle border border-warning-border rounded-lg space-y-1.5 animate-in fade-in duration-200 text-xs"
+                className="p-2.5 bg-warning-subtle border border-warning-border rounded-lg animate-in fade-in duration-200 text-xs flex flex-col gap-1.5 sm:grid sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-x-2"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-semibold text-warning-text flex items-center gap-1 min-w-0">
-                    <Users className="w-3.5 h-3.5 text-warning shrink-0" />
-                    MR 上的共享分析報告已過期，未載入
-                  </span>
-                  {/* 與下方「分析」按鈕走同一個流程（有同版本快取就直接顯示，否則呼叫 AI） */}
-                  <button
-                    type="button"
-                    onClick={onAnalyze}
-                    disabled={isLoading || !rawDiff.trim()}
-                    className="text-[11px] bg-surface hover:bg-warning-subtle text-warning-text border border-warning-border px-2 py-0.5 rounded-md font-semibold shrink-0 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Sparkles className="w-3 h-3" />
-                    重新分析
-                  </button>
-                </div>
-                <p className="text-[11px] text-warning-text">
-                  由 @{staleSharedAnalysis.author} 於 {formatYmd(staleSharedAnalysis.createdAt)} 發布
+                {/* 手機：由上到下為標題、作者、內文、commit、按鈕（獨立一列、全寬）；sm 以上按鈕以 grid 放回標題列右側。只渲染一顆按鈕，DOM 順序與手機視覺順序相同 */}
+                <span className="font-semibold text-warning-text flex items-center gap-1 min-w-0">
+                  <Users className="w-3.5 h-3.5 text-warning shrink-0" />
+                  MR 上的共享分析報告已過期，未載入
+                </span>
+                <p className="sm:col-span-2 text-[11px] text-warning-text">
+                  由 <AuthorName author={staleSharedAnalysis.author} /> 於{' '}
+                  {formatYmd(staleSharedAnalysis.createdAt)} 發布
                 </p>
-                <p className="text-[11px] text-warning-text leading-snug">
-                  {staleSharedAnalysis.sharedHeadSha
-                    ? '這份報告分析完後，MR 又有新的 commit，內容可能已經不準。'
-                    : '這份報告由舊版工具分享，沒有記錄分析時的 commit，無法確認是否對應 MR 目前的版本。'}
+                {/* 句尾片語不拆行：窄螢幕上「準。」不會單獨掉到下一行 */}
+                <p className="sm:col-span-2 text-[11px] text-warning-text leading-snug text-pretty">
+                  {staleSharedAnalysis.sharedHeadSha ? (
+                    <>
+                      這份報告分析完後，MR 又有新的 commit，<span className="whitespace-nowrap">內容可能已經不準。</span>
+                    </>
+                  ) : (
+                    <>
+                      這份報告由舊版工具分享，沒有記錄分析時的 commit，無法確認是否對應{' '}
+                      <span className="whitespace-nowrap">MR 目前的版本。</span>
+                    </>
+                  )}
                 </p>
                 {staleSharedAnalysis.sharedHeadSha && (
-                  <p className="text-[10px] text-muted font-mono break-all">
+                  <p className="sm:col-span-2 text-[10px] text-muted font-mono break-all">
                     報告 {staleSharedAnalysis.sharedHeadSha.slice(0, 8)}
                     {staleSharedAnalysis.currentHeadSha
                       ? ` → 目前 ${staleSharedAnalysis.currentHeadSha.slice(0, 8)}`
                       : ' · 無法取得 MR 目前的版本'}
                   </p>
                 )}
+                {/* 與新 commit 提示列的「抓最新內容重新分析」相同：先重新抓 MR 與 diff，再呼叫 AI 分析 */}
+                <button
+                  type="button"
+                  onClick={onReanalyze}
+                  disabled={isLoading || isFetchingGitLab || !rawDiff.trim()}
+                  className="text-[11px] bg-surface hover:bg-warning-subtle text-warning-text border border-warning-border px-2 py-1.5 sm:py-0.5 rounded-md font-semibold shrink-0 flex items-center justify-center gap-1 w-full sm:w-auto sm:row-start-1 sm:col-start-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  抓最新內容重新分析
+                </button>
               </div>
             )}
 
@@ -463,7 +475,8 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
           ) : (
             <>
               <Sparkles className={`w-4 h-4 ${hasResult ? 'text-primary' : 'text-indigo-200'}`} />
-              <span>{hasResult ? '重新分析' : '分析'}</span>
+              {/* 有結果時仍只分析輸入框目前的 diff（onAnalyze），不重新抓 MR；與過期卡片／新 commit 提示列的「抓最新內容重新分析」區分 */}
+              <span>{hasResult ? '用目前的 Diff 重新分析' : '分析'}</span>
             </>
           )}
         </button>

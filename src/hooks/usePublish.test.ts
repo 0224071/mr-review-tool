@@ -238,7 +238,7 @@ describe('usePublish', () => {
     const shared = note(8, `${SHARED_TAG_START}\n{}\n${SHARED_TAG_END}`);
     const { result, gitlab } = setup({ notes: [note(5, `${SUMMARY_TAG}\n舊摘要`), shared] });
     await actAsync(() => result.current.handleShareAnalysisToMr());
-    expect(result.current.shareConfirm).toMatchObject({ targetNoteId: 8, overwrite: 'shared', overwriteAuthor: 'a' });
+    expect(result.current.shareConfirm).toMatchObject({ targetNoteId: 8, overwrite: 'shared', overwriteAuthor: { name: 'a', username: 'a' } });
     await actAsync(() => result.current.handleConfirmShareAnalysis());
     expect(gitlab.shareAnalysis).toHaveBeenCalledWith(TARGET, SAMPLE_ANALYSIS_RESULT, 8, RESULT_REFS.head_sha);
   });
@@ -305,7 +305,7 @@ describe('usePublish', () => {
     expect(result.current.shareStage).toBeNull();
   });
 
-  it('分享分析報告：覆寫時帶原留言作者 handle、發布時間與網址（MR 網址 + #note_<id>）', async () => {
+  it('分享分析報告：覆寫時帶原留言作者（顯示名稱與 username）、發布時間與網址（MR 網址 + #note_<id>）', async () => {
     const shared: GitLabNote = {
       ...note(8, `${SHARED_TAG_START}\n{}\n${SHARED_TAG_END}`),
       author: { id: 2, name: 'FAKE Name', username: 'fake-handle' },
@@ -315,7 +315,7 @@ describe('usePublish', () => {
     await actAsync(() => result.current.handleShareAnalysisToMr());
     expect(result.current.shareConfirm).toMatchObject({
       overwrite: 'shared',
-      overwriteAuthor: 'fake-handle',
+      overwriteAuthor: { name: 'FAKE Name', username: 'fake-handle' },
       overwriteCreatedAt: '2026-10-01T08:00:00Z',
       overwriteNoteUrl: `${MR_URL}#note_8`,
     });

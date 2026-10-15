@@ -326,9 +326,10 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
       {hasNewCommit && (
         <div
           role="status"
-          className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-warning-border bg-warning-subtle text-xs text-warning-text"
+          className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3 px-4 py-2.5 rounded-xl border border-warning-border bg-warning-subtle text-xs text-warning-text"
         >
-          <span className="flex items-center gap-2">
+          {/* 手機：按鈕在文字下方獨立一列、全寬；sm 以上與文字同列靠右。只渲染一顆按鈕（比照過期共享報告卡片） */}
+          <span className="flex items-center gap-2 min-w-0">
             <GitCommitHorizontal className="w-4 h-4 text-warning shrink-0" />
             此 MR 在分析後有新的 commit，目前顯示的是舊結果
           </span>
@@ -336,10 +337,10 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
             <button
               type="button"
               onClick={onReanalyze}
-              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-warning-border bg-surface font-semibold text-warning-text hover:bg-warning-hover"
+              className="shrink-0 inline-flex items-center justify-center gap-1 w-full sm:w-auto px-2.5 py-1 rounded-lg border border-warning-border bg-surface font-semibold text-warning-text hover:bg-warning-hover"
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              重新分析
+              抓最新內容重新分析
             </button>
           )}
         </div>

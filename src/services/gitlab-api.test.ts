@@ -290,11 +290,38 @@ describe('共享分析標記（headSha）', () => {
   it('舊版標記（沒有 headSha）解析為 null；非字串的 headSha 也視為沒有', () => {
     expect(findSharedAnalysisInNotes([sharedNote(SAMPLE_ANALYSIS_RESULT)])).toMatchObject({
       noteId: 7,
-      author: 'Ann',
+      author: { name: 'Ann', username: 'ann' },
       headSha: null,
     });
     expect(findSharedAnalysisInNotes([sharedNote({ ...SAMPLE_ANALYSIS_RESULT, headSha: 123 })])?.headSha).toBeNull();
     expect(findSharedAnalysisInNotes([sharedNote({ ...SAMPLE_ANALYSIS_RESULT, headSha: '' })])?.headSha).toBeNull();
+  });
+
+  it('作者同時保留顯示名稱與 username', () => {
+    expect(findSharedAnalysisInNotes([sharedNote(SAMPLE_ANALYSIS_RESULT)])?.author).toEqual({ name: 'Ann', username: 'ann' });
+  });
+
+  it('不認得的 category 正規化為預設分類「other」、不認得的 severity 為 medium；認得的值不變（#71）', () => {
+    const [first, second, ...rest] = SAMPLE_ANALYSIS_RESULT.reviews;
+    const shared = findSharedAnalysisInNotes([
+      sharedNote({
+        ...SAMPLE_ANALYSIS_RESULT,
+        reviews: [{ ...first, category: 'FAKE-unknown-category' }, { ...second, severity: 'FAKE-critical' }, ...rest],
+      }),
+    ]);
+    expect(shared?.result.reviews[0].category).toBe('other');
+    expect(shared?.result.reviews[0].severity).toBe(first.severity);
+    expect(shared?.result.reviews[1].category).toBe(second.category);
+    expect(shared?.result.reviews[1].severity).toBe('medium');
+    expect(shared?.result.reviews.slice(2)).toEqual(rest);
+  });
+
+  it('reviews 不是陣列時視為沒有意見，非物件的項目略過', () => {
+    expect(findSharedAnalysisInNotes([sharedNote({ ...SAMPLE_ANALYSIS_RESULT, reviews: 'FAKE' })])?.result.reviews).toEqual([]);
+    const [first] = SAMPLE_ANALYSIS_RESULT.reviews;
+    expect(
+      findSharedAnalysisInNotes([sharedNote({ ...SAMPLE_ANALYSIS_RESULT, reviews: [null, 3, first] })])?.result.reviews
+    ).toEqual([first]);
   });
 
   it('schemaVersion 不符的標記不採用', () => {

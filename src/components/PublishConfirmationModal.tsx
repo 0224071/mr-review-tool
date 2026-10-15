@@ -8,11 +8,12 @@ import {
   MessageSquare,
   Sparkles,
 } from 'lucide-react';
-import { GitLabDiffRefs, GitLabMergeRequestInfo } from '../types/gitlab';
+import { GitLabAuthor, GitLabDiffRefs, GitLabMergeRequestInfo } from '../types/gitlab';
 import { MRReviewItem } from '../types/review';
 import { plannedPublishMode } from '../services/review-publisher';
 import { hasSuggestion, resolveEffectiveComment, resolveEffectiveSuggestion } from '../core/review-text';
 import { formatYmd } from '../core/date-format';
+import { AuthorName } from './AuthorName';
 
 interface PublishConfirmationModalProps {
   isOpen: boolean;
@@ -30,11 +31,11 @@ interface PublishConfirmationModalProps {
   isPublishingSummary?: boolean;
   /**
    * 共享分析報告（隱藏標記留言）；overwrite 為要覆寫的既有留言種類，null 表示新增一則。
-   * 覆寫時帶原留言的作者 handle、發布時間與網址。
+   * 覆寫時帶原留言的作者（顯示名稱與 username）、發布時間與網址。
    */
   share?: {
     overwrite: 'shared' | 'summary' | null;
-    overwriteAuthor?: string;
+    overwriteAuthor?: GitLabAuthor;
     overwriteCreatedAt?: string;
     overwriteNoteUrl?: string;
   };
@@ -86,12 +87,14 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
     title ?? (share ? '確認共享分析報告至 MR' : isPublishingSummary ? '確認發布整體摘要留言' : '確認發布審查意見至 GitLab');
   const overwriteLabel = share?.overwrite === 'shared' ? '共享報告留言' : '整體摘要留言';
   const overwriteDate = share?.overwriteCreatedAt ? formatYmd(share.overwriteCreatedAt) : null;
-  const overwriteSentence = [
-    '會覆寫',
-    share?.overwriteAuthor ? ` @${share.overwriteAuthor}` : ' MR 上',
-    overwriteDate ? ` 於 ${overwriteDate}` : '',
-    ` 發布的${overwriteLabel}，不會另外新增留言`,
-  ].join('');
+  // 「會覆寫 名稱 @username 於 2026/10/1 發布的共享報告留言，不會另外新增留言」
+  const overwriteSentence = (
+    <>
+      會覆寫{' '}
+      {share?.overwriteAuthor ? <AuthorName author={share.overwriteAuthor} /> : 'MR 上'}
+      {overwriteDate ? ` 於 ${overwriteDate}` : ''} 發布的{overwriteLabel}，不會另外新增留言
+    </>
+  );
   const confirmLabel = share
     ? share.overwrite
       ? '確認共享（覆寫 1 則留言）'
@@ -116,12 +119,17 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
               <h2 className="text-base font-semibold text-ink">
                 {heading}
               </h2>
-              <p className="text-xs text-muted">
-                {notice
-                  ? `模擬發布：${notice}`
-                  : share
-                    ? '會在 MR 上留下一則留言，團隊成員都看得到'
-                    : '透過 GitLab Discussions API 直接發表至 MR'}
+              <p className="text-xs text-muted text-pretty">
+                {notice ? (
+                  `模擬發布：${notice}`
+                ) : share ? (
+                  // 片語不拆行：窄螢幕上「到」不會單獨掉到下一行
+                  <>
+                    會在 MR 上留下一則留言，<span className="whitespace-nowrap">團隊成員都看得到</span>
+                  </>
+                ) : (
+                  '透過 GitLab Discussions API 直接發表至 MR'
+                )}
               </p>
             </div>
           </div>
@@ -180,7 +188,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
                 <div className="space-y-1 min-w-0">
                   <p className="font-semibold">{overwriteSentence}</p>
                   {share.overwriteNoteUrl && (
-                    <p className="text-[11px] flex flex-wrap items-center gap-x-1.5">
+                    <p className="text-[11px]">
                       <a
                         href={share.overwriteNoteUrl}
                         target="_blank"
@@ -190,7 +198,6 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
                         查看原留言
                         <ExternalLink className="w-3 h-3" />
                       </a>
-                      {overwriteDate && <span>· 發布於 {overwriteDate}</span>}
                     </p>
                   )}
                   <p className="text-[11px] leading-snug opacity-90">{SHARE_CONTENT_NOTE}</p>
