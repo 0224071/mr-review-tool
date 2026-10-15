@@ -74,6 +74,10 @@ export interface MRAnalysisResult {
   graph: MRGraph;
   checklistCoverage?: ChecklistCoverageItem[];
   reviews: MRReviewItem[];
+  /** 產生此結果的模型供應商（舊結果沒有此欄位，視為 gemini） */
+  provider?: string;
+  /** 產生此結果的模型 id */
+  model?: string;
 }
 
 export interface WritingCheckViolation {

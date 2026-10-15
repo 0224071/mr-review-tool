@@ -25,13 +25,27 @@ import {
   defaultSelectedIndices,
   findPublishedMatches,
 } from './core/publish-dedup';
-import { buildAnalysisRecord, shouldServeFromCache } from './core/analysis-record';
+import {
+  buildAnalysisRecord,
+  findCachedRecord,
+  recordKeyForResult,
+  shouldServeFromCache,
+} from './core/analysis-record';
+import {
+  clearProviderKey,
+  getProviderSettings,
+  isProviderReady,
+  loadSettings,
+  saveSettings,
+} from './core/settings-store';
 import { enrichGroupsWithParsedDiff, parseGitDiff } from './core/diff-parser';
 import { alignReviewsWithDiff, dropUnverifiedFallbackLines } from './core/line-resolver';
-import { analyzeGitDiffWithGemini } from './services/gemini-service';
+import { analyzeGitDiff } from './services/review-service';
+import { createProvider, PROVIDER_META } from './providers/registry';
+import { ProviderId } from './providers/types';
 import { SAMPLE_GIT_DIFF } from './services/diff-sources/sample-diffs';
 import { SAMPLE_ANALYSIS_RESULT } from './services/diff-sources/sample-analysis';
-import { AppSettings, DEFAULT_SETTINGS } from './types/settings';
+import { AppSettings } from './types/settings';
 import { MRAnalysisResult, MRReviewItem } from './types/review';
 import { DiffFile } from './types/diff';
 import {
@@ -55,8 +69,6 @@ import {
 import { publishReviewItem } from './services/review-publisher';
 import { AlertCircle, DatabaseZap, Info, Sparkles } from 'lucide-react';
 
-const SETTINGS_STORAGE_KEY = 'gitlab_mr_reviewer_settings';
-
 type PublishItem = {
   review: MRReviewItem;
   customComment?: string;
@@ -64,19 +76,23 @@ type PublishItem = {
   index: number;
 };
 
+/** 結果標記：「OpenAI · gpt-4.1-mini」；舊結果沒有標記時不顯示 */
+function formatGeneratedBy(result: MRAnalysisResult): string | undefined {
+  if (!result.provider) return undefined;
+  const label = PROVIDER_META[result.provider as ProviderId]?.label ?? result.provider;
+  return result.model ? `${label} · ${result.model}` : label;
+}
+
 export default function App() {
   // Load settings from localStorage
-  const [settings, setSettings] = useState<AppSettings>(() => {
-    try {
-      const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
-      if (stored) {
-        return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
-      }
-    } catch {
-      // ignore
-    }
-    return DEFAULT_SETTINGS;
-  });
+  const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
+  const providerReady = isProviderReady(settings);
+  const providerLabel = PROVIDER_META[settings.llmProvider].label;
+  /** 目前所選 provider / model，作為快取 key 的一部分 */
+  const currentProviderModel = {
+    provider: settings.llmProvider,
+    model: getProviderSettings(settings).model.trim(),
+  };
 
   const [rawDiff, setRawDiff] = useState<string>('');
   const [analysisResult, setAnalysisResult] = useState<MRAnalysisResult | null>(null);
@@ -291,10 +307,13 @@ export default function App() {
     notes: GitLabNote[]
   ) => {
     const source = describeSource(diffText, mr);
+    const recordKey = recordKeyForResult(source.id, result);
     let existing: HistoryRecord | undefined;
     if (historyStore) {
       try {
-        existing = await historyStore.get(source.id);
+        existing = await historyStore.get(recordKey);
+        // 用 Gemini 重新分析時沿用舊版（無 provider 後綴）紀錄的已發布狀態與釘選，並取代之
+        if (!existing && result.provider === 'gemini') existing = await historyStore.get(source.id);
       } catch {
         existing = undefined;
       }
@@ -305,6 +324,7 @@ export default function App() {
     if (historyStore) {
       try {
         await historyStore.put(record, now);
+        if (existing && existing.id !== record.id) await historyStore.remove(existing.id);
         await refreshHistory();
       } catch {
         // 寫入失敗不影響顯示
@@ -314,18 +334,19 @@ export default function App() {
     if (!historyStore) setCurrentRecordId(null);
   };
 
-  // Persist settings
+  // Persist settings（只存在此瀏覽器 localStorage）
   const handleSaveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings);
-    try {
-      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(newSettings));
-    } catch {
-      // ignore
-    }
+    saveSettings(newSettings);
+  };
+
+  /** 「清除 key」：立即從 localStorage 移除該 provider 的金鑰 */
+  const handleClearProviderKey = (id: ProviderId) => {
+    setSettings(clearProviderKey(settings, id));
   };
 
   const runAnalysis = async (diffText: string, mr: GitLabMergeRequestInfo | null) => {
-    if (!settings.geminiApiKey) {
+    if (!providerReady) {
       setIsSettingsOpen(true);
       return;
     }
@@ -335,10 +356,11 @@ export default function App() {
     setErrorMessage(null);
 
     try {
-      const result = await analyzeGitDiffWithGemini({
+      // 只呼叫使用者所選的 provider，失敗時不自動改用其他家
+      const provider = createProvider(settings.llmProvider, getProviderSettings(settings));
+      const result = await analyzeGitDiff({
         rawDiff: diffText,
-        apiKey: settings.geminiApiKey,
-        model: settings.geminiModel,
+        provider,
         teamRules: settings.teamRules,
         onBatchProgress: (current, total) => {
           setBatchProgress({ current, total });
@@ -360,11 +382,11 @@ export default function App() {
     if (historyStore && rawDiff.trim()) {
       const source = describeSource(rawDiff, currentGitLabMr);
       try {
-        const cached = await historyStore.get(source.id);
+        const cached = await findCachedRecord(historyStore, source.id, currentProviderModel);
         if (
           cached &&
           shouldServeFromCache({
-            sourceId: source.id,
+            sourceId: cached.id,
             currentRecordId,
             cached,
             currentHeadSha: currentGitLabMr?.diff_refs?.head_sha,
@@ -387,7 +409,7 @@ export default function App() {
       await runAnalysis(rawDiff, currentGitLabMr);
       return;
     }
-    if (!settings.geminiApiKey) {
+    if (!providerReady) {
       setIsSettingsOpen(true);
       return;
     }
@@ -515,16 +537,22 @@ export default function App() {
       setRemoteNotes(notes);
 
       // 4. 有快取就直接顯示，不呼叫 Gemini；切到沒有快取的 MR 時清掉前一個 MR 的結果
-      const key = buildMrHistoryKey(baseUrl, projectPath, mrIid);
-      const cached = historyStore ? await historyStore.get(key).catch(() => undefined) : undefined;
+      // 快取依 MR + 目前所選 provider / model 查找
+      const sourceKey = buildMrHistoryKey(baseUrl, projectPath, mrIid);
+      const cached = historyStore
+        ? await findCachedRecord(historyStore, sourceKey, currentProviderModel).catch(() => undefined)
+        : undefined;
       if (cached) {
         const latestHead = mrInfo.diff_refs?.head_sha ?? null;
         applyRecord(cached);
         if (latestHead && latestHead !== cached.latestHeadSha && historyStore) {
-          await historyStore.update(key, { latestHeadSha: latestHead }).catch(() => undefined);
+          await historyStore.update(cached.id, { latestHeadSha: latestHead }).catch(() => undefined);
         }
         await refreshHistory();
-      } else if (currentRecordIdRef.current !== key) {
+      } else if (
+        currentRecordIdRef.current !== sourceKey &&
+        !currentRecordIdRef.current?.startsWith(`${sourceKey}#`)
+      ) {
         setAnalysisResult(null);
         setCurrentRecordId(null);
         setAnalyzedAt(null);
@@ -883,7 +911,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
       {/* 1. Header */}
       <Header
         onOpenSettings={() => setIsSettingsOpen(true)}
-        hasApiKey={!!settings.geminiApiKey}
+        hasApiKey={providerReady}
         onOpenHistory={historyAvailable ? () => setIsHistoryOpen(true) : undefined}
         historyCount={historyAvailable ? historyRecords.length : undefined}
       />
@@ -949,7 +977,8 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
               onLoadSampleDiff={handleLoadSampleDiff}
               onLoadSampleAnalysis={handleLoadSampleAnalysis}
               isLoading={isLoading}
-              hasApiKey={!!settings.geminiApiKey}
+              hasApiKey={providerReady}
+              providerLabel={providerLabel}
               onOpenSettings={() => setIsSettingsOpen(true)}
               // Stage 2 GitLab props
               gitlabMrUrl={gitlabMrUrl}
@@ -1032,6 +1061,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                 analyzedAtLabel={
                   historyAvailable && analyzedAt ? formatHistoryTime(analyzedAt) : undefined
                 }
+                generatedByLabel={formatGeneratedBy(analysisResult)}
                 hasNewCommit={historyAvailable === true && !!currentRecord && hasNewCommit(currentRecord)}
                 onReanalyze={handleReanalyze}
               />
@@ -1060,6 +1090,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onSave={handleSaveSettings}
+        onClearKey={handleClearProviderKey}
       />
 
       {/* 4. Diff Viewer Modal */}

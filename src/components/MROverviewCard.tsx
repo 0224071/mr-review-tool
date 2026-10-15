@@ -14,12 +14,15 @@ interface MROverviewCardProps {
   hasGitLabMr?: boolean;
   /** 分析時間（YYYY/MM/DD HH:mm）；無法保存歷史紀錄時不傳 */
   analyzedAtLabel?: string;
+  /** 產生結果的 provider / model */
+  generatedByLabel?: string;
 }
 
 export const MROverviewCard: React.FC<MROverviewCardProps> = ({
   result,
   hasGitLabMr = false,
   analyzedAtLabel,
+  generatedByLabel,
 }) => {
   const [isAllSummaryOpen, setIsAllSummaryOpen] = useState(false);
   const [isTestsOpen, setIsTestsOpen] = useState(false);
@@ -56,6 +59,11 @@ export const MROverviewCard: React.FC<MROverviewCardProps> = ({
               {analyzedAtLabel && (
                 <span className="text-[11px] text-muted whitespace-nowrap shrink-0">
                   分析於 {analyzedAtLabel}
+                </span>
+              )}
+              {generatedByLabel && (
+                <span className="text-[10px] font-medium text-primary bg-primary-subtle border border-primary-border rounded px-1.5 py-0.5 whitespace-nowrap shrink-0">
+                  {generatedByLabel}
                 </span>
               )}
             </div>

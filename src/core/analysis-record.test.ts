@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
-import { buildAnalysisRecord, HistorySourceInfo, shouldServeFromCache } from './analysis-record';
+import {
+  buildAnalysisRecord,
+  buildProviderCacheKey,
+  cacheKeyCandidates,
+  findCachedRecord,
+  HistorySourceInfo,
+  shouldServeFromCache,
+} from './analysis-record';
 import { buildMrHistoryKey, HistoryRecord, openHistoryStore } from './history-store';
 import { createPublishedRecord } from './publish-dedup';
 import { MRAnalysisResult, MRReviewItem } from '../types/review';
@@ -135,5 +142,47 @@ describe('buildAnalysisRecord（重新分析）', () => {
     expect(list).toHaveLength(1);
     expect(list[0].analyzedAt).toBe(NOW);
     expect(list[0].published).toEqual([pub]);
+  });
+});
+
+describe('provider / model 快取 key', () => {
+  it('有標記 provider 的結果以來源 key + provider + model 存放', () => {
+    const rec = buildAnalysisRecord({
+      source,
+      result: { ...result([review()]), provider: 'anthropic', model: 'claude-opus-5-5' },
+      diffText: 'd',
+      mr: mr('h1'),
+      notes: [],
+      existing: undefined,
+      now: NOW,
+    });
+    expect(rec.id).toBe(buildProviderCacheKey(KEY, { provider: 'anthropic', model: 'claude-opus-5-5' }));
+    expect(rec.provider).toBe('anthropic');
+    expect(rec.model).toBe('claude-opus-5-5');
+  });
+
+  it('不同 provider / model 互不命中；舊快取（無後綴）只在選用 gemini 時命中', async () => {
+    const store = await openHistoryStore(new IDBFactory());
+    const legacy = buildAnalysisRecord({ source, result: result([review()]), diffText: 'd', mr: mr('h1'), notes: [], existing: undefined, now: NOW });
+    expect(legacy.id).toBe(KEY);
+    expect(legacy.provider).toBe('gemini');
+    await store!.put(legacy, NOW);
+
+    expect((await findCachedRecord(store!, KEY, { provider: 'gemini', model: 'gemini-3.8-flash' }))?.id).toBe(KEY);
+    expect(await findCachedRecord(store!, KEY, { provider: 'openai', model: 'gpt-4.1-mini' })).toBeUndefined();
+
+    const openaiRec = buildAnalysisRecord({
+      source,
+      result: { ...result([review()]), provider: 'openai', model: 'gpt-4.1-mini' },
+      diffText: 'd',
+      mr: mr('h1'),
+      notes: [],
+      existing: undefined,
+      now: NOW,
+    });
+    await store!.put(openaiRec, NOW);
+    expect((await findCachedRecord(store!, KEY, { provider: 'openai', model: 'gpt-4.1-mini' }))?.id).toBe(openaiRec.id);
+    expect(await findCachedRecord(store!, KEY, { provider: 'openai', model: 'gpt-4.1' })).toBeUndefined();
+    expect(cacheKeyCandidates(KEY, { provider: 'gemini', model: 'g' })).toEqual([`${KEY}#gemini:g`, KEY]);
   });
 });

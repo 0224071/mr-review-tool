@@ -28,6 +28,8 @@ interface DiffInputPanelProps {
   onLoadSampleAnalysis: () => void;
   isLoading: boolean;
   hasApiKey: boolean;
+  /** 目前所選模型供應商名稱 */
+  providerLabel?: string;
   onOpenSettings: () => void;
 
   // GitLab Props
@@ -54,6 +56,7 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
   onLoadSampleDiff,
   isLoading,
   hasApiKey,
+  providerLabel = 'Gemini',
   onOpenSettings,
   gitlabMrUrl,
   onGitlabMrUrlChange,
@@ -456,7 +459,7 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
           <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5 flex items-center justify-between">
             <span className="flex items-center gap-1">
               <Key className="w-3 h-3 text-amber-600 shrink-0" />
-              尚未設定 Gemini API Key
+              尚未設定 {providerLabel} API Key
             </span>
             <button
               type="button"
