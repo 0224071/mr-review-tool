@@ -36,7 +36,14 @@ import { ReviewPublishState } from '../types/gitlab';
 import { DiffFile } from '../types/diff';
 import { PublishedMatch } from '../core/publish-dedup';
 import { formatHistoryTime } from '../core/history-store';
-import { formatReviewForCopy, resolveEffectiveSuggestion } from '../core/review-text';
+import {
+  deselectIfCommentEmpty,
+  EMPTY_COMMENT_MESSAGE,
+  formatReviewForCopy,
+  hasCommentText,
+  resolveEffectiveComment,
+  resolveEffectiveSuggestion,
+} from '../core/review-text';
 
 interface ReviewCommentsListProps {
   reviews: MRReviewItem[];
@@ -258,7 +265,12 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
     });
   }, [indexedReviews, selectedGroupId, selectedCategory, selectedSeverity]);
 
+  /** 內文（草稿優先）是空的，不能勾選、複製或發布 */
+  const isCommentEmpty = (index: number) =>
+    !hasCommentText(resolveEffectiveComment(draftEdits[index]?.comment, reviews[index]?.comment));
+
   const handleToggleSelect = (index: number) => {
+    if (isCommentEmpty(index)) return;
     const next = new Set(selectedIndices);
     if (next.has(index)) {
       next.delete(index);
@@ -273,7 +285,9 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
     const verifiedFiltered = filteredAndSortedReviews.filter(
       (item) => item.review.lineVerified !== false
     );
-    const targetItems = verifiedFiltered.length > 0 ? verifiedFiltered : filteredAndSortedReviews;
+    const targetItems = (verifiedFiltered.length > 0 ? verifiedFiltered : filteredAndSortedReviews).filter(
+      (item) => !isCommentEmpty(item.originalIndex)
+    );
     const targetIndices = targetItems.map((item) => item.originalIndex);
     const allSelected = targetIndices.every((idx) => selectedIndices.has(idx));
 
@@ -306,7 +320,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
   };
 
   const handleCopyReview = (review: MRReviewItem, index: number) => {
-    const comment = draftEdits[index]?.comment || review.comment;
+    if (isCommentEmpty(index)) return;
+    const comment = resolveEffectiveComment(draftEdits[index]?.comment, review.comment);
     const suggestion = resolveEffectiveSuggestion(draftEdits[index]?.suggestion, review.suggestion);
     const formatted = formatReviewForCopy(
       SEVERITY_META[review.severity].label,
@@ -337,7 +352,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
           >
             {filteredAndSortedReviews.length > 0 &&
             filteredAndSortedReviews
-              .filter((item) => item.review.lineVerified !== false)
+              .filter((item) => item.review.lineVerified !== false && !isCommentEmpty(item.originalIndex))
               .every((item) => selectedIndices.has(item.originalIndex)) ? (
               <CheckSquare className="w-3.5 h-3.5 text-primary" />
             ) : (
@@ -402,6 +417,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
               suggestion: review.suggestion,
             };
             const isDraftModified = !!draftEdits[originalIndex];
+            const commentEmpty = isCommentEmpty(originalIndex);
 
             const pubState = publishStates[originalIndex];
             const publishedMatch = publishedMatches[originalIndex];
@@ -424,9 +440,9 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     <button
                       type="button"
                       onClick={() => handleToggleSelect(originalIndex)}
-                      disabled={isSending}
+                      disabled={isSending || commentEmpty}
                       className="text-slate-400 hover:text-primary disabled:opacity-40 transition-colors mt-0.5 shrink-0 cursor-pointer"
-                      title={isPublished ? '已發布過，勾選將重複發布' : '勾選此意見'}
+                      title={commentEmpty ? EMPTY_COMMENT_MESSAGE : isPublished ? '已發布過，勾選將重複發布' : '勾選此意見'}
                       aria-pressed={isSelected}
                     >
                       {isSelected ? (
@@ -493,6 +509,16 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                         {currentDraft.comment}
                       </span>
                     )}
+
+                    {commentEmpty && (
+                      <span
+                        role="status"
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium text-[11px] shrink-0 mt-0.5 text-danger-text bg-danger-subtle"
+                      >
+                        <AlertCircle className="w-3 h-3 text-danger" />
+                        {EMPTY_COMMENT_MESSAGE}
+                      </span>
+                    )}
                   </div>
 
                   {/* Actions Toolbar: Only visible on hover or focus */}
@@ -547,8 +573,9 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     <button
                       type="button"
                       onClick={() => handleCopyReview(review, originalIndex)}
-                      className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors"
-                      title="複製意見"
+                      disabled={commentEmpty}
+                      className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors disabled:opacity-40"
+                      title={commentEmpty ? EMPTY_COMMENT_MESSAGE : '複製意見'}
                       aria-label="複製意見"
                     >
                       {copiedIndex === originalIndex ? (
@@ -572,7 +599,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                             )
                           )
                         }
-                        disabled={isSending || isPublishing}
+                        disabled={isSending || isPublishing || commentEmpty}
                         className="p-1 rounded text-gitlab hover:text-gitlab-hover hover:bg-gitlab-subtle transition-colors disabled:opacity-40"
                         title={isPublished ? '已發布過，再次發布會重複' : '發布此則至 GitLab'}
                         aria-label="發布單則"
@@ -592,15 +619,18 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                       </label>
                       <textarea
                         value={currentDraft.comment}
-                        onChange={(e) =>
+                        onChange={(e) => {
                           setDraftEdits((prev) => ({
                             ...prev,
                             [originalIndex]: {
                               ...currentDraft,
                               comment: e.target.value,
                             },
-                          }))
-                        }
+                          }));
+                          // 清空時自動取消勾選；補上內文後不自動勾回
+                          const next = deselectIfCommentEmpty(selectedIndices, originalIndex, e.target.value);
+                          if (next !== selectedIndices) setSelectedIndices(next);
+                        }}
                         rows={2}
                         className="w-full p-2 border border-slate-300 rounded-md font-sans text-xs focus:ring-1 focus:ring-primary focus:outline-none bg-white"
                       />
@@ -817,7 +847,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                           )
                         )
                       }
-                      disabled={isPublishing}
+                      disabled={isPublishing || commentEmpty}
                       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold text-gitlab border border-gitlab-border bg-gitlab-subtle hover:bg-surface disabled:opacity-40"
                     >
                       <RotateCcw className="w-3 h-3" />

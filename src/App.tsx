@@ -70,7 +70,7 @@ import {
   updateGitLabNote,
 } from './services/gitlab-api';
 import { publishReviewBatch } from './services/review-publisher';
-import { resolveEffectiveSuggestion } from './core/review-text';
+import { filterPublishableItems, resolveEffectiveComment, resolveEffectiveSuggestion } from './core/review-text';
 import { AlertCircle, DatabaseZap, Info, Sparkles } from 'lucide-react';
 
 type PublishItem = {
@@ -630,6 +630,9 @@ export default function App() {
     setInspectingDiff({ file, line });
   };
 
+  /** 要發布的意見內文：草稿優先，清空也不退回 AI 原值 */
+  const publishCommentFor = (item: PublishItem) => resolveEffectiveComment(item.customComment, item.review.comment);
+
   const openPublishModal = (items: PublishItem[]) => {
     setPublishModalConfig({
       isPublishingSummary: false,
@@ -641,12 +644,18 @@ export default function App() {
   /**
    * 發布前比對本地發布紀錄＋MR 現有留言；有重複時先跳橘色警告，按「仍要發布」才進原本的發布確認。
    */
-  const requestPublishReviews = async (items: PublishItem[]) => {
+  const requestPublishReviews = async (requested: PublishItem[]) => {
     if (!settings.gitlabToken) {
       setIsSettingsOpen(true);
       return;
     }
-    if (!analysisResult || items.length === 0 || isPublishingInProgress) return;
+    if (!analysisResult || requested.length === 0 || isPublishingInProgress) return;
+    // 內文是空的意見不發布（「發布已選」、單則發布與重試共用此入口）
+    const items = filterPublishableItems(requested);
+    if (items.length < requested.length) {
+      setInfoMessage(`已略過 ${requested.length - items.length} 則內文是空的意見，不會發布。`);
+    }
+    if (items.length === 0) return;
 
     let notes = remoteNotes;
     const targetMrUrl = currentGitLabMr?.web_url || gitlabMrUrl;
@@ -834,7 +843,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
           items.map((item) => ({
             index: item.index,
             review: item.review,
-            comment: item.customComment || item.review.comment,
+            comment: publishCommentFor(item),
             suggestion: resolveEffectiveSuggestion(item.customSuggestion, item.review.suggestion),
           })),
           diffRefs,
@@ -856,7 +865,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                 if (item) {
                   markPublished(
                     item,
-                    item.customComment || item.review.comment,
+                    publishCommentFor(item),
                     resolveEffectiveSuggestion(item.customSuggestion, item.review.suggestion),
                     result.discussionId
                   );
