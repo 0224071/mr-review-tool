@@ -213,7 +213,8 @@ const NOTES_MAX_PAGES = 100;
 
 /**
  * Fetches all MR notes (comments), newest first, following GitLab pagination (x-next-page).
- * 第一頁失敗回傳空陣列；之後的頁面失敗則拋錯，避免以不完整的留言做重複發布比對。
+ * 讀不完整就拋錯（任何一頁失敗、回應不是陣列、分頁異常或超過頁數上限），
+ * 呼叫端不會拿到不完整的留言去做重複發布比對。
  */
 export async function fetchGitLabMrNotes(
   baseUrl: string,
@@ -225,28 +226,36 @@ export async function fetchGitLabMrNotes(
   const encodedPath = encodeURIComponent(projectPath);
   const notes: GitLabNote[] = [];
 
-  let page: number | null = 1;
-  for (let fetched = 0; page !== null && fetched < NOTES_MAX_PAGES; fetched++) {
+  let page = 1;
+  for (let fetched = 0; fetched < NOTES_MAX_PAGES; fetched++) {
     const url = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/notes?per_page=${NOTES_PER_PAGE}&page=${page}&sort=desc`;
     const res = await gitlabFetch(url, { headers: getHeaders(token) });
     if (!res.ok) {
-      if (page === 1) return [];
       throw new Error(`讀取 MR 留言失敗 (第 ${page} 頁，${res.status})`);
     }
     const batch: unknown = await res.json();
-    if (!Array.isArray(batch)) break;
+    if (!Array.isArray(batch)) {
+      throw new Error(`讀取 MR 留言失敗 (第 ${page} 頁回應格式不正確)`);
+    }
     notes.push(...(batch as GitLabNote[]));
 
+    let next: number | null;
     const nextHeader = res.headers.get('x-next-page');
     if (nextHeader !== null) {
-      const next = parseInt(nextHeader, 10);
-      page = Number.isNaN(next) || next <= page ? null : next;
+      // 最後一頁的 x-next-page 是空字串
+      const parsed = nextHeader.trim() === '' ? null : parseInt(nextHeader, 10);
+      if (parsed !== null && (Number.isNaN(parsed) || parsed <= page)) {
+        throw new Error(`讀取 MR 留言失敗 (第 ${page} 頁的分頁資訊不正確)`);
+      }
+      next = parsed;
     } else {
       // 沒有分頁 header（例如被 proxy 拿掉）時，以回傳筆數判斷是否還有下一頁
-      page = batch.length === NOTES_PER_PAGE ? page + 1 : null;
+      next = batch.length === NOTES_PER_PAGE ? page + 1 : null;
     }
+    if (next === null) return notes;
+    page = next;
   }
-  return notes;
+  throw new Error(`讀取 MR 留言失敗 (超過 ${NOTES_MAX_PAGES} 頁上限)`);
 }
 
 /** MR 留言中偵測到的共享分析報告 */

@@ -56,7 +56,7 @@ interface AnalysisResultViewProps {
     }>
   ) => void;
   publishStates?: Record<number, ReviewPublishState>;
-  /** 發布作業進行中：停用發布與重試按鈕，避免重複送出 */
+  /** 發布作業進行中（含發布前讀留言、共享分析）：停用所有發布相關按鈕，避免重複送出 */
   isPublishing?: boolean;
   isGitLabConfigured?: boolean;
   onPublishSummaryToMr?: () => void;
@@ -418,7 +418,8 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
             <button
               type="button"
               onClick={() => setIsPublishMenuOpen(!isPublishMenuOpen)}
-              className="flex items-center gap-1 px-3 py-1.5 bg-surface hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg font-medium transition-colors shadow-2xs"
+              disabled={isPublishing}
+              className="flex items-center gap-1 px-3 py-1.5 bg-surface hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg font-medium transition-colors shadow-2xs disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {isReadingShareNotes ? (
                 <>
@@ -442,7 +443,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                     if (onPublishSummaryToMr) onPublishSummaryToMr();
                     setIsPublishMenuOpen(false);
                   }}
-                  disabled={isSummaryPublished}
+                  disabled={isSummaryPublished || isPublishing}
                   className="w-full text-left p-2 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
                 >
                   <div className="font-semibold text-slate-800 flex items-center justify-between">
@@ -465,7 +466,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                     if (onShareAnalysisToMr) onShareAnalysisToMr();
                     setIsPublishMenuOpen(false);
                   }}
-                  disabled={isSharingToMr || isSharedToMrPublished}
+                  disabled={isSharingToMr || isPublishing || isSharedToMrPublished}
                   className="w-full text-left p-2 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50 border-t border-slate-100"
                 >
                   <div className="font-semibold text-slate-800 flex items-center justify-between">
@@ -784,7 +785,8 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsStickyMoreOpen(!isStickyMoreOpen)}
-                  className="px-2.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 transition-colors"
+                  disabled={isPublishing}
+                  className="px-2.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {isReadingShareNotes ? '讀取留言中...' : '更多 ▾'}
                 </button>
@@ -797,7 +799,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                         if (onPublishSummaryToMr) onPublishSummaryToMr();
                         setIsStickyMoreOpen(false);
                       }}
-                      disabled={isSummaryPublished}
+                      disabled={isSummaryPublished || isPublishing}
                       className="w-full text-left p-2 rounded-lg hover:bg-slate-700 transition-colors disabled:opacity-50"
                     >
                       <div className="font-semibold">發布摘要至 MR</div>
@@ -809,7 +811,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                         if (onShareAnalysisToMr) onShareAnalysisToMr();
                         setIsStickyMoreOpen(false);
                       }}
-                      disabled={isSharingToMr || isSharedToMrPublished}
+                      disabled={isSharingToMr || isPublishing || isSharedToMrPublished}
                       className="w-full text-left p-2 rounded-lg hover:bg-slate-700 transition-colors disabled:opacity-50 border-t border-slate-700"
                     >
                       <div className="font-semibold">{isReadingShareNotes ? '讀取留言中...' : '共享分析（免 Key 共享）'}</div>

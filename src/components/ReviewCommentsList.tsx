@@ -64,7 +64,7 @@ interface ReviewCommentsListProps {
     index?: number
   ) => void;
   publishStates?: Record<number, ReviewPublishState>;
-  /** 有發布作業進行中時停用發布／重試按鈕 */
+  /** 有發布作業進行中（含發布前讀留言）時停用勾選、發布／重試按鈕 */
   isPublishing?: boolean;
   /** 依本地紀錄與 MR 現有留言判斷的已發布意見 */
   publishedMatches?: Record<number, PublishedMatch>;
@@ -284,7 +284,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
     !hasCommentText(resolveEffectiveComment(draftEdits[index]?.comment, reviews[index]?.comment));
 
   const handleToggleSelect = (index: number) => {
-    if (isCommentEmpty(index)) return;
+    // 發布作業進行中（含發布前讀留言）不改變勾選
+    if (isPublishing || isCommentEmpty(index)) return;
     const next = new Set(selectedIndices);
     if (next.has(index)) {
       next.delete(index);
@@ -300,6 +301,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
     selectableFiltered.length > 0 && selectableFiltered.every((item) => selectedIndices.has(item.originalIndex));
 
   const handleSelectAllFiltered = () => {
+    if (isPublishing) return;
     const targetIndices = selectableFiltered.map((item) => item.originalIndex);
     const next = new Set(selectedIndices);
     if (allSelectableSelected) {
@@ -357,7 +359,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
           <button
             type="button"
             onClick={handleSelectAllFiltered}
-            className="flex items-center gap-1.5 px-2 py-1 bg-surface border border-slate-200 rounded-md text-slate-700 hover:bg-slate-50 transition-colors text-xs font-medium cursor-pointer"
+            disabled={isPublishing}
+            className="flex items-center gap-1.5 px-2 py-1 bg-surface border border-slate-200 rounded-md text-slate-700 hover:bg-slate-50 transition-colors text-xs font-medium cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
             title="全選 / 取消全選可發布的意見（含行號未驗證、改以一般留言發出者；內文是空的不勾）"
           >
             {allSelectableSelected ? (
@@ -459,7 +462,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                       <button
                         type="button"
                         onClick={() => handleToggleSelect(originalIndex)}
-                        disabled={isSending || commentEmpty}
+                        disabled={isSending || isPublishing || commentEmpty}
                         className={`text-slate-400 hover:text-primary disabled:pointer-events-none transition-colors cursor-pointer ${
                           dimmed ? '' : 'disabled:opacity-40'
                         }`}
