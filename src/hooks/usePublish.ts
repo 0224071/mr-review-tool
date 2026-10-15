@@ -20,6 +20,17 @@ export type PublishItem = {
   index: number;
 };
 
+/** 共享分析確認視窗的內容 */
+export interface ShareConfirmState {
+  target: PublishTarget;
+  /** 要覆寫的留言；null 表示新增一則 */
+  targetNoteId: number | null;
+  /** 覆寫的是既有分享報告或整體摘要留言；null 表示新增 */
+  overwrite: 'shared' | 'summary' | null;
+  /** 被覆寫留言的作者 */
+  overwriteAuthor?: string;
+}
+
 export interface UsePublishOptions {
   gitlab: GitLabGateway;
   settings: Pick<SettingsState, 'settings' | 'setIsSettingsOpen'>;
@@ -81,6 +92,8 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
     itemsToPublish: [],
   });
   const [duplicateWarning, setDuplicateWarning] = useState<{ fresh: PublishItem[]; duplicates: PublishItem[] } | null>(null);
+  /** 共享分析的確認視窗：開啟時已讀好留言並決定新增或覆寫哪一則；按確認前不送出任何寫入請求 */
+  const [shareConfirm, setShareConfirm] = useState<ShareConfirmState | null>(null);
 
   // 發布時使用的 diff_refs：結果產生時的版本 → 目前 MR → 服務提供的備用版本（示範模式）
   const publishDiffRefs = resultDiffRefs ?? currentGitLabMr?.diff_refs ?? gitlab.fallbackDiffRefs;
@@ -331,8 +344,12 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
   };
 
   // Stage 2: Mechanism 1 - Post complete analysis JSON back to MR note
+  /**
+   * 「共享分析」第一步：只讀取 MR 留言（GET）判斷要新增或覆寫哪一則，再開確認視窗；
+   * 使用者按確認（handleConfirmShareAnalysis）才寫入 GitLab。
+   */
   const handleShareAnalysisToMr = async () => {
-    if (!analysisResult) return;
+    if (!analysisResult || isSharingToMr) return;
     let target: PublishTarget;
     try {
       target = gitlab.resolveTarget(mrUrl, settings);
@@ -351,9 +368,31 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
       // 4. 整體留言去重：若使用者先發整體摘要、後發分享報告，分享報告改為更新既有的摘要留言，讓 MR 上只保留一則整體留言
       const notes = await gitlab.fetchNotes(target);
       const { sharedNote, summaryNote } = findExistingOverallNote(notes);
-      const targetNoteId = sharedNote ? sharedNote.id : summaryNote ? summaryNote.id : null;
+      const overwriteNote = sharedNote ?? summaryNote;
+      setShareConfirm({
+        target,
+        targetNoteId: overwriteNote ? overwriteNote.id : null,
+        overwrite: sharedNote ? 'shared' : summaryNote ? 'summary' : null,
+        overwriteAuthor: overwriteNote ? overwriteNote.author.name || overwriteNote.author.username : undefined,
+      });
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : '讀取 MR 留言失敗，未共享分析報告');
+    } finally {
+      setIsSharingToMr(false);
+    }
+  };
 
-      await gitlab.shareAnalysis(target, analysisResult, targetNoteId);
+  /** 確認視窗按「確認共享」：寫入（新增或覆寫）分享留言，標記中帶分析當時的 head sha */
+  const handleConfirmShareAnalysis = async () => {
+    if (!analysisResult || !shareConfirm || isSharingToMr) return;
+    setIsSharingToMr(true);
+    try {
+      await gitlab.shareAnalysis(
+        shareConfirm.target,
+        analysisResult,
+        shareConfirm.targetNoteId,
+        resultDiffRefs?.head_sha ?? null
+      );
       setIsSharedToMrPublished(true);
       setIsSummaryPublished(true);
       setInfoMessage(withNotice('已共享分析報告。', gitlab.notice));
@@ -361,7 +400,13 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
       setErrorMessage(err instanceof Error ? err.message : '分享報告至 MR 留言失敗');
     } finally {
       setIsSharingToMr(false);
+      setShareConfirm(null);
     }
+  };
+
+  /** 確認視窗按「取消」：不送出任何請求 */
+  const cancelShareAnalysis = () => {
+    if (!isSharingToMr) setShareConfirm(null);
   };
 
   /** 重複發布警告的「仍要全部發布」：未發布與重複的一起依原順序送進發布確認 */
@@ -390,12 +435,15 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
     isPublishingInProgress,
     publishModalConfig,
     isSharingToMr,
+    shareConfirm,
     duplicateWarning,
     handlePublishSingleReview,
     handlePublishBatchReviews,
     handlePublishSummaryToMr,
     handleConfirmPublish,
     handleShareAnalysisToMr,
+    handleConfirmShareAnalysis,
+    cancelShareAnalysis,
     publishAllDespiteDuplicates,
     confirmDuplicateWarning,
     cancelDuplicateWarning,

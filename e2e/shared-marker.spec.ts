@@ -99,19 +99,18 @@ async function fetchMr(page: Page) {
 
 const sharedCard = (page: Page) => page.getByText('已偵測到共享分析報告');
 const loadSharedButton = (page: Page) => page.getByRole('button', {name: '載入此共享報告'});
+/** 共享報告與 MR 目前版本不符、未載入時的提示卡片 */
+const staleSharedCard = (page: Page) => page.getByRole('status').filter({hasText: '共享分析報告已過期，未載入'});
 
 test.describe('有效的隱藏標記', () => {
   test('開啟同一 MR 可載入共享結果，不送出 AI 請求', async ({page}) => {
-    await mockSharedMr(page, {headSha: OLD_HEAD_SHA, notes: [note(sharedNoteBody())]});
+    await mockSharedMr(page, {headSha: OLD_HEAD_SHA, notes: [note(sharedNoteBody({extra: {headSha: OLD_HEAD_SHA}}))]});
     await page.goto('/');
     const aiCalls = trackAiRequests(page);
     await saveFakeSettings(page);
 
     await fetchMr(page);
-    await expect(sharedCard(page)).toBeVisible();
     await expect(page.getByText('由 @Reviewer Bot 於')).toBeVisible();
-
-    await loadSharedButton(page).click();
     await expect(page.getByText(RESULT_TITLE).first()).toBeVisible();
     await expect(page.getByText(SAMPLE_ANALYSIS_RESULT.reviews[0].comment).first()).toBeVisible();
     await expect(sharedCard(page)).toBeHidden();
@@ -119,16 +118,15 @@ test.describe('有效的隱藏標記', () => {
     expect(aiCalls, '載入共享結果不應呼叫 AI').toEqual([]);
   });
 
-  // 產品行為不符：偵測到標記後只顯示「載入此共享報告」卡片，要使用者再點一次才載入，
-  // 並非情境要求（以及分享留言本身寫的「將自動載入此報告」）的自動載入。修正後拿掉 fixme。
-  test.fixme('偵測到有效標記時自動載入結果，不需再點按鈕', async ({page}) => {
-    await mockSharedMr(page, {headSha: OLD_HEAD_SHA, notes: [note(sharedNoteBody())]});
+  test('偵測到有效標記時自動載入結果，不需再點按鈕', async ({page}) => {
+    await mockSharedMr(page, {headSha: OLD_HEAD_SHA, notes: [note(sharedNoteBody({extra: {headSha: OLD_HEAD_SHA}}))]});
     await page.goto('/');
     const aiCalls = trackAiRequests(page);
     await saveFakeSettings(page);
 
     await fetchMr(page);
     await expect(page.getByText(RESULT_TITLE).first()).toBeVisible();
+    await expect(loadSharedButton(page)).toHaveCount(0);
     expect(aiCalls).toEqual([]);
   });
 });
@@ -151,44 +149,76 @@ test.describe('過期的隱藏標記', () => {
     expect(aiCalls).toEqual([]);
   });
 
-  // 產品行為不符：分享留言的隱藏標記只有 v=1 與分析 JSON，沒有記錄分析時的 head sha，
-  // findSharedAnalysisInNotes 也不比對 MR 目前的 diff_refs.head_sha，MR 有新 commit 時仍會提供載入舊結果。
-  // 標記目前沒有 head sha 欄位，這裡假設以 JSON 的 headSha 記錄；實作時依實際格式調整後拿掉 fixme。
-  test.fixme('MR 有新 commit（head sha 不同）時不載入舊結果', async ({page}) => {
+  // 標記 JSON 的 headSha 記錄分析時 MR 的 diff_refs.head_sha，與 MR 目前 head sha 不同就不載入
+  test('MR 有新 commit（head sha 不同）時不載入舊結果', async ({page}) => {
     await mockSharedMr(page, {
       headSha: NEW_HEAD_SHA,
       notes: [note(sharedNoteBody({extra: {headSha: OLD_HEAD_SHA}}))],
     });
     await page.goto('/');
+    const aiCalls = trackAiRequests(page);
     await saveFakeSettings(page);
 
     await fetchMr(page);
     await expect(sharedCard(page)).toBeHidden();
     await expect(loadSharedButton(page)).toHaveCount(0);
     await expect(page.getByText(RESULT_TITLE)).toHaveCount(0);
+    // 只顯示過期提示，請使用者重新分析
+    await expect(staleSharedCard(page)).toBeVisible();
+    await expect(staleSharedCard(page)).toContainText('需要重新分析');
+    await expect(staleSharedCard(page)).toContainText(NEW_HEAD_SHA.slice(0, 8));
+    await expect(page.getByRole('button', {name: '分析', exact: true})).toBeEnabled();
+    expect(aiCalls).toEqual([]);
+  });
+
+  test('舊版標記沒有 headSha 時視為不符，只顯示提示不載入', async ({page}) => {
+    await mockSharedMr(page, {headSha: OLD_HEAD_SHA, notes: [note(sharedNoteBody())]});
+    await page.goto('/');
+    await saveFakeSettings(page);
+
+    await fetchMr(page);
+    await expect(staleSharedCard(page)).toBeVisible();
+    await expect(staleSharedCard(page)).toContainText('沒有記錄分析時的 commit');
+    await expect(page.getByText(RESULT_TITLE)).toHaveCount(0);
+  });
+
+  // 對照組：同樣的標記，head sha 與 MR 目前相同時仍自動載入（確認上面不載入是因為版本不符）
+  test('對照：head sha 相同時仍自動載入', async ({page}) => {
+    await mockSharedMr(page, {
+      headSha: NEW_HEAD_SHA,
+      notes: [note(sharedNoteBody({extra: {headSha: NEW_HEAD_SHA}}))],
+    });
+    await page.goto('/');
+    const aiCalls = trackAiRequests(page);
+    await saveFakeSettings(page);
+
+    await fetchMr(page);
+    await expect(page.getByText(RESULT_TITLE).first()).toBeVisible();
+    await expect(staleSharedCard(page)).toHaveCount(0);
+    expect(aiCalls).toEqual([]);
   });
 });
 
 test.describe('發布到 MR 前的確認', () => {
-  /** 從共享標記載入結果，取得可發布的分析畫面（不經 AI） */
+  /** 開啟帶有效標記（head sha 相同）的 MR，共享結果自動載入，取得可發布的分析畫面（不經 AI） */
   async function openLoadedResult(page: Page) {
-    await mockSharedMr(page, {headSha: OLD_HEAD_SHA, notes: [note(sharedNoteBody())]});
+    await mockSharedMr(page, {headSha: OLD_HEAD_SHA, notes: [note(sharedNoteBody({extra: {headSha: OLD_HEAD_SHA}}))]});
     await page.goto('/');
     await saveFakeSettings(page);
     await fetchMr(page);
-    await loadSharedButton(page).click();
     await expect(page.getByText(RESULT_TITLE).first()).toBeVisible();
   }
 
-  // 產品行為不符：「共享分析（免 Key 共享）」按下後直接讀留言並 POST/PUT 分享留言，沒有確認視窗。
-  // 不能在沒有確認的情況下點它（會送出寫入請求），因此 fixme；加上確認視窗後拿掉 fixme。
-  test.fixme('分享到 MR 前出現確認視窗，取消後不送出任何寫入請求', async ({page, blockedRequests}) => {
+  test('分享到 MR 前出現確認視窗，取消後不送出任何寫入請求', async ({page, blockedRequests}) => {
     await openLoadedResult(page);
     await page.getByRole('button', {name: '發布至 MR ▾'}).click();
     await page.getByRole('button', {name: /共享分析（免 Key 共享）/}).first().click();
 
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
+    // MR 已有分享留言：說明會覆寫該留言
+    await expect(dialog).toContainText('將覆寫 MR 上既有的共享分析報告留言');
+    await expect(dialog.getByRole('button', {name: /確認共享（覆寫 1 則留言）/})).toBeVisible();
     await dialog.getByRole('button', {name: '取消'}).click();
     await expect(dialog).toBeHidden();
     await expect(page.getByText('已共享分析報告。')).toHaveCount(0);

@@ -247,10 +247,21 @@ export async function fetchGitLabMrNotes(
   return notes;
 }
 
+/** MR 留言中偵測到的共享分析報告 */
+export interface SharedAnalysis {
+  result: MRAnalysisResult;
+  noteId: number;
+  author: string;
+  createdAt: string;
+  /** 分析當時 MR 的 diff_refs.head_sha；舊版標記沒有此欄位時為 null */
+  headSha: string | null;
+}
+
 /**
  * Looks for embedded shared MR analysis JSON within MR notes
+ * 標記 JSON 的 headSha 為分析時的 head sha，不屬於分析結果本身，會從 result 中拿掉。
  */
-export function findSharedAnalysisInNotes(notes: GitLabNote[]): { result: MRAnalysisResult; noteId: number; author: string; createdAt: string } | null {
+export function findSharedAnalysisInNotes(notes: GitLabNote[]): SharedAnalysis | null {
   for (const note of notes) {
     if (note.body && note.body.includes(SHARED_TAG_START) && note.body.includes(SHARED_TAG_END)) {
       try {
@@ -262,13 +273,15 @@ export function findSharedAnalysisInNotes(notes: GitLabNote[]): { result: MRAnal
         const jsonMatch = jsonBlock.match(/```json\s*([\s\S]*?)\s*```/) || jsonBlock.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const raw = jsonMatch[1] || jsonMatch[0];
-          const parsed = JSON.parse(raw.trim()) as MRAnalysisResult;
+          const parsed = JSON.parse(raw.trim()) as MRAnalysisResult & { headSha?: unknown };
           if (parsed && parsed.schemaVersion === 1 && parsed.title && parsed.groups) {
+            const { headSha, ...result } = parsed;
             return {
-              result: parsed,
+              result,
               noteId: note.id,
               author: note.author.name || note.author.username,
               createdAt: note.created_at,
+              headSha: typeof headSha === 'string' && headSha ? headSha : null,
             };
           }
         }
@@ -278,6 +291,17 @@ export function findSharedAnalysisInNotes(notes: GitLabNote[]): { result: MRAnal
     }
   }
   return null;
+}
+
+/**
+ * 共享報告是否對應 MR 目前的版本：兩邊都有 head sha 且相同才算；
+ * 舊版標記沒有 headSha、或讀不到 MR 目前的 head sha 時一律視為不符（不自動載入）。
+ */
+export function isSharedAnalysisCurrent(
+  shared: Pick<SharedAnalysis, 'headSha'>,
+  currentHeadSha: string | null | undefined
+): boolean {
+  return !!shared.headSha && !!currentHeadSha && shared.headSha === currentHeadSha;
 }
 
 /**
@@ -434,6 +458,7 @@ export function findExistingOverallNote(notes: GitLabNote[]): {
  * Formats and posts or updates the complete MR analysis JSON back to the MR as a shared comment
  * (Mechanism 1: Share analysis result back to MR with hidden metadata tag)
  * If targetNoteId is provided (e.g. existing summary note or shared note), updates that note to preserve a single overall comment.
+ * headSha 為分析當時 MR 的 diff_refs.head_sha；沒有（例如手動貼上的 diff）時不寫入，開啟時視為版本不符。
  */
 export async function postSharedAnalysisToMr(
   baseUrl: string,
@@ -441,9 +466,11 @@ export async function postSharedAnalysisToMr(
   projectPath: string,
   mrIid: number,
   result: MRAnalysisResult,
-  targetNoteId?: number | null
+  targetNoteId?: number | null,
+  headSha?: string | null
 ): Promise<{ id: number; updated: boolean }> {
-  const jsonString = JSON.stringify(result, null, 2);
+  // headSha 記錄分析當時 MR 的 head sha，開啟時與 MR 目前版本比對，不同就不自動載入
+  const jsonString = JSON.stringify(headSha ? { ...result, headSha } : result, null, 2);
 
   const commentBody = `### 🤖 GitLab MR AI 講解與審查報告
 

@@ -210,11 +210,66 @@ describe('usePublish', () => {
   it('分享分析報告：更新既有摘要留言', async () => {
     const { result, gitlab, state } = setup({ notes: [note(5, `${SUMMARY_TAG}\n舊摘要`)] });
     await actAsync(() => result.current.handleShareAnalysisToMr());
-    expect(gitlab.shareAnalysis).toHaveBeenCalledWith(TARGET, SAMPLE_ANALYSIS_RESULT, 5);
+    await actAsync(() => result.current.handleConfirmShareAnalysis());
+    expect(gitlab.shareAnalysis).toHaveBeenCalledWith(TARGET, SAMPLE_ANALYSIS_RESULT, 5, RESULT_REFS.head_sha);
     expect(state.shared.box.value).toBe(true);
     expect(state.summary.box.value).toBe(true);
     expect(state.info.box.value).toBe('已共享分析報告。');
     expect(result.current.isSharingToMr).toBe(false);
+  });
+
+  it('分享分析報告：先開確認視窗（新增留言），確認前只讀留言、不寫入', async () => {
+    const { result, gitlab, state } = setup();
+    await actAsync(() => result.current.handleShareAnalysisToMr());
+    expect(gitlab.fetchNotes).toHaveBeenCalledWith(TARGET);
+    expect(result.current.shareConfirm).toEqual({ target: TARGET, targetNoteId: null, overwrite: null, overwriteAuthor: undefined });
+    expect(gitlab.shareAnalysis).not.toHaveBeenCalled();
+    expect(gitlab.createNote).not.toHaveBeenCalled();
+    expect(gitlab.updateNote).not.toHaveBeenCalled();
+    expect(state.shared.box.value).toBe(false);
+
+    await actAsync(() => result.current.handleConfirmShareAnalysis());
+    expect(gitlab.shareAnalysis).toHaveBeenCalledWith(TARGET, SAMPLE_ANALYSIS_RESULT, null, RESULT_REFS.head_sha);
+    expect(result.current.shareConfirm).toBeNull();
+    expect(state.shared.box.value).toBe(true);
+  });
+
+  it('分享分析報告：已有分享留言時確認視窗標示覆寫該則', async () => {
+    const shared = note(8, `${SHARED_TAG_START}\n{}\n${SHARED_TAG_END}`);
+    const { result, gitlab } = setup({ notes: [note(5, `${SUMMARY_TAG}\n舊摘要`), shared] });
+    await actAsync(() => result.current.handleShareAnalysisToMr());
+    expect(result.current.shareConfirm).toMatchObject({ targetNoteId: 8, overwrite: 'shared', overwriteAuthor: 'a' });
+    await actAsync(() => result.current.handleConfirmShareAnalysis());
+    expect(gitlab.shareAnalysis).toHaveBeenCalledWith(TARGET, SAMPLE_ANALYSIS_RESULT, 8, RESULT_REFS.head_sha);
+  });
+
+  it('分享分析報告：取消確認視窗不送出寫入', async () => {
+    const { result, gitlab, state } = setup({ notes: [note(5, `${SUMMARY_TAG}\n舊摘要`)] });
+    await actAsync(() => result.current.handleShareAnalysisToMr());
+    expect(result.current.shareConfirm).toMatchObject({ overwrite: 'summary', targetNoteId: 5 });
+    await actAsync(() => result.current.cancelShareAnalysis());
+    expect(result.current.shareConfirm).toBeNull();
+    expect(gitlab.shareAnalysis).not.toHaveBeenCalled();
+    expect(gitlab.createNote).not.toHaveBeenCalled();
+    expect(gitlab.updateNote).not.toHaveBeenCalled();
+    expect(state.shared.box.value).toBe(false);
+    expect(state.info.box.value).toBeNull();
+  });
+
+  it('分享分析報告：結果沒有 diff_refs 時不寫 headSha（開啟時不自動載入）', async () => {
+    const { result, gitlab } = setup({ withResultRefs: false });
+    await actAsync(() => result.current.handleShareAnalysisToMr());
+    await actAsync(() => result.current.handleConfirmShareAnalysis());
+    expect(gitlab.shareAnalysis).toHaveBeenCalledWith(TARGET, SAMPLE_ANALYSIS_RESULT, null, null);
+  });
+
+  it('分享分析報告：讀取留言失敗時顯示錯誤、不開確認視窗', async () => {
+    const { result, gitlab, state } = setup();
+    vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(new Error('讀取留言失敗 (500)'));
+    await actAsync(() => result.current.handleShareAnalysisToMr());
+    expect(result.current.shareConfirm).toBeNull();
+    expect(state.error.box.value).toBe('讀取留言失敗 (500)');
+    expect(gitlab.shareAnalysis).not.toHaveBeenCalled();
   });
 
   it('分享分析報告：沒有 MR 網址時顯示錯誤', async () => {

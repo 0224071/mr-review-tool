@@ -21,8 +21,7 @@ const render = (settings: AppSettings) =>
       onFetchGitLabMr={async () => {}}
       isFetchingGitLab={false}
       currentGitLabMr={null}
-      sharedAnalysisAvailable={null}
-      onLoadSharedAnalysis={() => {}}
+      staleSharedAnalysis={null}
       hasGitLabToken={false}
       gitlabError={null}
     />
