@@ -1,15 +1,20 @@
 import React from 'react';
-import { GitPullRequest, Settings, Key } from 'lucide-react';
+import { GitPullRequest, Settings, Key, History } from 'lucide-react';
 
 interface HeaderProps {
   onOpenSettings: () => void;
   hasApiKey: boolean;
   onLoadSample?: () => void;
+  /** 未提供時（例如 IndexedDB 不可用）不顯示歷史紀錄按鈕 */
+  onOpenHistory?: () => void;
+  historyCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   hasApiKey,
+  onOpenHistory,
+  historyCount,
 }) => {
   return (
     <header className="bg-surface border-b border-surface-border sticky top-0 z-30 shadow-xs">
@@ -28,6 +33,21 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right Actions: Settings */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {onOpenHistory && (
+            <button
+              type="button"
+              onClick={onOpenHistory}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark hover:bg-surface-muted transition-colors"
+            >
+              <History className="w-3.5 h-3.5 text-muted" />
+              <span>歷史紀錄</span>
+              {historyCount !== undefined && (
+                <span className="text-[10px] font-semibold text-muted bg-surface-muted rounded px-1">
+                  {historyCount}
+                </span>
+              )}
+            </button>
+          )}
 
           {/* Settings button */}
           <button

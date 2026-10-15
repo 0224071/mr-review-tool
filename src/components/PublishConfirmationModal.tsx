@@ -117,7 +117,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-slate-700 font-semibold flex items-center gap-1">
                         <FileCode className="w-3 h-3 text-slate-400" />
-                        {review.file}{review.line ? `:L${review.line}` : ''}
+                        {review.file}{review.line != null ? `:L${review.line}` : review.lineVerified === false ? ':行號未驗證' : ''}
                         {review.lineVerified === false && (
                           <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-amber-100 text-amber-800 border border-amber-300">
                             此意見行號可能不準確

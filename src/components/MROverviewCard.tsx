@@ -12,11 +12,14 @@ import { MRAnalysisResult } from '../types/review';
 interface MROverviewCardProps {
   result: MRAnalysisResult;
   hasGitLabMr?: boolean;
+  /** 分析時間（YYYY/MM/DD HH:mm）；無法保存歷史紀錄時不傳 */
+  analyzedAtLabel?: string;
 }
 
 export const MROverviewCard: React.FC<MROverviewCardProps> = ({
   result,
   hasGitLabMr = false,
+  analyzedAtLabel,
 }) => {
   const [isAllSummaryOpen, setIsAllSummaryOpen] = useState(false);
   const [isTestsOpen, setIsTestsOpen] = useState(false);
@@ -50,6 +53,11 @@ export const MROverviewCard: React.FC<MROverviewCardProps> = ({
               <h2 className="text-base font-bold text-slate-900 tracking-tight">
                 {result.title}
               </h2>
+              {analyzedAtLabel && (
+                <span className="text-[11px] text-muted whitespace-nowrap shrink-0">
+                  分析於 {analyzedAtLabel}
+                </span>
+              )}
             </div>
             {/* One-line statistics */}
             <div className="text-xs text-muted flex items-center gap-2">

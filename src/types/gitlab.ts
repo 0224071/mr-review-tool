@@ -55,6 +55,13 @@ export interface GitLabNote {
   };
   created_at: string;
   system: boolean;
+  /** 行內 discussion 的位置（一般留言沒有） */
+  position?: {
+    new_path?: string | null;
+    old_path?: string | null;
+    new_line?: number | null;
+    old_line?: number | null;
+  } | null;
 }
 
 export interface ParsedGitLabUrl {
@@ -69,6 +76,8 @@ export interface ReviewPublishState {
   status: PublishStatus;
   errorMessage?: string;
   discussionId?: string | number;
+  /** 行內留言失敗、改發一般留言的原因（取代原始錯誤訊息顯示） */
+  fallbackReason?: string;
   editedComment?: string;
   editedSuggestion?: string;
 }

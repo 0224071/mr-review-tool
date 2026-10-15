@@ -46,10 +46,14 @@ export function extractBacktickSnippets(comment?: string, suggestion?: string): 
  * Rules:
  * 1. Find file in parsedDiff matching review.file.
  * 2. Search added lines (+) matching codeSnippet (trimmed). If multiple matches, select closest to review.line.
+ *    If nothing matches exactly and the snippet is long enough, retry with lines containing the snippet.
  * 3. If not found in added lines, search context lines (both new & old line), then deleted lines (-) (returning old_line).
  * 4. Snippet verification:
- *    - Extract backticked snippets from comment & suggestion.
- *    - If the matched line doesn't contain any snippet, search ±5 lines around it.
+ *    - Extract backticked snippets from comment & suggestion; only snippets that appear in the file diff are used
+ *      (suggested replacement code is not in the diff and can neither confirm nor refute the line).
+ *    - Unless the candidate itself is a deleted line, deleted lines are ignored during verification.
+ *    - If the matched line doesn't contain any snippet, search ±5 lines around it (only snippets that occur on
+ *      a single line of the file diff may move the anchor).
  *    - If found in ±5 lines, switch to that line.
  *    - If not found in ±5 lines, keep original line and set lineVerified = false.
  *    - If comment has no backticked snippets, retain existing logic.
@@ -57,7 +61,8 @@ export function extractBacktickSnippets(comment?: string, suggestion?: string): 
  *    - If codeSnippet (without spaces) < 8 characters or appears multiple times in the file diff,
  *      and did not pass backticked snippet verification, mark lineVerified = false.
  * 6. Fallback:
- *    - If codeSnippet cannot be found anywhere in the file diff, fallback to review.line with lineVerified = false.
+ *    - If codeSnippet cannot be found anywhere in the file diff, return null lines with lineVerified = false.
+ *      AI 給的行號（例如 999）未經驗證，不保留，以免被當成可信行號顯示或發布。
  */
 export function resolveReviewLine(
   review: {
@@ -69,6 +74,7 @@ export function resolveReviewLine(
   },
   parsedDiff: ParsedDiff
 ): ResolvedLineResult {
+  // AI 給的行號只用來在多個候選中挑最近的一行
   const fallbackLine = review.line ?? null;
   const targetSnippet = (review.codeSnippet || '').trim();
 
@@ -85,7 +91,7 @@ export function resolveReviewLine(
 
   if (!matchedFile || !targetSnippet) {
     return {
-      newLine: fallbackLine,
+      newLine: null,
       oldLine: null,
       lineVerified: false,
     };
@@ -103,64 +109,77 @@ export function resolveReviewLine(
 
   // Reliability checks
   const isTooShort = targetSnippet.replace(/\s+/g, '').length < 8;
-  const matchingLinesInFile = allLines.filter((l) => l.content.trim() === targetSnippet);
-  const isDuplicateInFile = matchingLinesInFile.length > 1;
+  const isExactMatch = (l: DiffLine): boolean => l.content.trim() === targetSnippet;
+  // AI 偶爾給被截斷的 codeSnippet（例如 `<li key={index} className=`）；夠長時退回以「包含」比對
+  const isPartialMatch = (l: DiffLine): boolean => l.content.includes(targetSnippet);
 
   // Find candidate line in diff
-  let candidateIndex = -1;
+  const findCandidate = (matches: (l: DiffLine) => boolean): number => {
+    let candidateIndex = -1;
 
-  // 2. Search added lines (+) first
-  const addedIndices: number[] = [];
-  allLines.forEach((l, idx) => {
-    if (l.type === 'add' && l.content.trim() === targetSnippet && l.newLineNumber != null) {
-      addedIndices.push(idx);
-    }
-  });
-
-  if (addedIndices.length > 0) {
-    candidateIndex = addedIndices.reduce((prevIdx, currIdx) => {
-      const prevLine = allLines[prevIdx].newLineNumber ?? 0;
-      const currLine = allLines[currIdx].newLineNumber ?? 0;
-      return Math.abs(currLine - baseLine) < Math.abs(prevLine - baseLine) ? currIdx : prevIdx;
-    });
-  } else {
-    // 3. Search unchanged context lines
-    const contextIndices: number[] = [];
+    // 2. Search added lines (+) first
+    const addedIndices: number[] = [];
     allLines.forEach((l, idx) => {
-      if (l.type === 'context' && l.content.trim() === targetSnippet) {
-        contextIndices.push(idx);
+      if (l.type === 'add' && matches(l) && l.newLineNumber != null) {
+        addedIndices.push(idx);
       }
     });
 
-    if (contextIndices.length > 0) {
-      candidateIndex = contextIndices.reduce((prevIdx, currIdx) => {
-        const prevLine = allLines[prevIdx].newLineNumber ?? allLines[prevIdx].oldLineNumber ?? 0;
-        const currLine = allLines[currIdx].newLineNumber ?? allLines[currIdx].oldLineNumber ?? 0;
+    if (addedIndices.length > 0) {
+      candidateIndex = addedIndices.reduce((prevIdx, currIdx) => {
+        const prevLine = allLines[prevIdx].newLineNumber ?? 0;
+        const currLine = allLines[currIdx].newLineNumber ?? 0;
         return Math.abs(currLine - baseLine) < Math.abs(prevLine - baseLine) ? currIdx : prevIdx;
       });
     } else {
-      // Search deleted lines (-)
-      const deletedIndices: number[] = [];
+      // 3. Search unchanged context lines
+      const contextIndices: number[] = [];
       allLines.forEach((l, idx) => {
-        if (l.type === 'delete' && l.content.trim() === targetSnippet && l.oldLineNumber != null) {
-          deletedIndices.push(idx);
+        if (l.type === 'context' && matches(l)) {
+          contextIndices.push(idx);
         }
       });
 
-      if (deletedIndices.length > 0) {
-        candidateIndex = deletedIndices.reduce((prevIdx, currIdx) => {
-          const prevLine = allLines[prevIdx].oldLineNumber ?? 0;
-          const currLine = allLines[currIdx].oldLineNumber ?? 0;
+      if (contextIndices.length > 0) {
+        candidateIndex = contextIndices.reduce((prevIdx, currIdx) => {
+          const prevLine = allLines[prevIdx].newLineNumber ?? allLines[prevIdx].oldLineNumber ?? 0;
+          const currLine = allLines[currIdx].newLineNumber ?? allLines[currIdx].oldLineNumber ?? 0;
           return Math.abs(currLine - baseLine) < Math.abs(prevLine - baseLine) ? currIdx : prevIdx;
         });
+      } else {
+        // Search deleted lines (-)
+        const deletedIndices: number[] = [];
+        allLines.forEach((l, idx) => {
+          if (l.type === 'delete' && matches(l) && l.oldLineNumber != null) {
+            deletedIndices.push(idx);
+          }
+        });
+
+        if (deletedIndices.length > 0) {
+          candidateIndex = deletedIndices.reduce((prevIdx, currIdx) => {
+            const prevLine = allLines[prevIdx].oldLineNumber ?? 0;
+            const currLine = allLines[currIdx].oldLineNumber ?? 0;
+            return Math.abs(currLine - baseLine) < Math.abs(prevLine - baseLine) ? currIdx : prevIdx;
+          });
+        }
       }
     }
+
+    return candidateIndex;
+  };
+
+  let candidateIndex = findCandidate(isExactMatch);
+  let matchingLinesInFile = allLines.filter(isExactMatch);
+  if (candidateIndex === -1 && !isTooShort) {
+    candidateIndex = findCandidate(isPartialMatch);
+    matchingLinesInFile = allLines.filter(isPartialMatch);
   }
+  const isDuplicateInFile = matchingLinesInFile.length > 1;
 
   // If not found in any hunk lines, fallback to review.line with unverified
   if (candidateIndex === -1) {
     return {
-      newLine: fallbackLine,
+      newLine: null,
       oldLine: null,
       lineVerified: false,
     };
@@ -169,9 +188,21 @@ export function resolveReviewLine(
   const candidateLine = allLines[candidateIndex];
 
   // 4. Strengthened snippet verification with backtick snippets
-  const backtickSnippets = extractBacktickSnippets(review.comment, review.suggestion);
+  // 候選行不是刪除行時，不把錨點移到刪除行（建議常寫「改回舊寫法」，會剛好命中被刪掉的那行）
+  const isEligibleLine = (line: DiffLine): boolean => candidateLine.type === 'delete' || line.type !== 'delete';
+  // 只用確實出現在 diff 中的片段驗證；修改建議裡的修正後程式碼不在 diff 裡，無法佐證也無法否定行號
+  const backtickSnippets = extractBacktickSnippets(review.comment, review.suggestion).filter((snippet) =>
+    allLines.some((l) => isEligibleLine(l) && l.content.includes(snippet))
+  );
   const lineContainsSnippet = (line: DiffLine): boolean => {
-    return backtickSnippets.some((snippet) => line.content.includes(snippet));
+    return isEligibleLine(line) && backtickSnippets.some((snippet) => line.content.includes(snippet));
+  };
+  // 只有在檔案中唯一出現的片段才能移動錨點；像 `favorites` 這種到處都有的識別字會把精準命中的行拉走
+  const anchorSnippets = backtickSnippets.filter(
+    (snippet) => allLines.filter((l) => isEligibleLine(l) && l.content.includes(snippet)).length === 1
+  );
+  const lineContainsAnchorSnippet = (line: DiffLine): boolean => {
+    return isEligibleLine(line) && anchorSnippets.some((snippet) => line.content.includes(snippet));
   };
 
   let effectiveLine = candidateLine;
@@ -190,7 +221,7 @@ export function resolveReviewLine(
 
       const candidateOffsets: number[] = [];
       for (let i = windowStart; i <= windowEnd; i++) {
-        if (i !== candidateIndex && lineContainsSnippet(allLines[i])) {
+        if (i !== candidateIndex && lineContainsAnchorSnippet(allLines[i])) {
           candidateOffsets.push(i);
         }
       }
@@ -272,10 +303,37 @@ export function alignReviewsWithDiff(
     const resolved = resolveReviewLine(review, parsedDiff);
     return {
       ...review,
-      line: resolved.newLine ?? resolved.oldLine ?? review.line,
+      // 未驗證時不退回 AI 給的行號
+      line: resolved.newLine ?? resolved.oldLine ?? (resolved.lineVerified ? review.line : null),
       newLine: resolved.newLine,
       oldLine: resolved.oldLine,
       lineVerified: resolved.lineVerified,
     };
+  });
+}
+
+/**
+ * 舊快取紀錄中，未驗證意見可能仍帶著 AI 給的行號（例如 999）。
+ * 行號不在該檔案 diff 中的未驗證意見，把行號清空。
+ */
+export function dropUnverifiedFallbackLines(reviews: MRReviewItem[], parsedDiff: ParsedDiff): MRReviewItem[] {
+  return reviews.map((review) => {
+    if (review.lineVerified !== false || review.line == null) return review;
+    const fileNorm = normalizeFilePath(review.file);
+    const file = parsedDiff.files.find(
+      (f) => normalizeFilePath(f.newPath) === fileNorm || normalizeFilePath(f.oldPath) === fileNorm
+    );
+    const inDiff =
+      !!file &&
+      file.hunks.some((h) =>
+        h.lines.some(
+          (l) =>
+            (review.newLine != null && l.newLineNumber === review.newLine) ||
+            (review.oldLine != null && l.oldLineNumber === review.oldLine) ||
+            (review.newLine == null && review.oldLine == null &&
+              (l.newLineNumber === review.line || l.oldLineNumber === review.line))
+        )
+      );
+    return inDiff ? review : { ...review, line: null, newLine: null, oldLine: null };
   });
 }
