@@ -80,23 +80,43 @@ function getHeaders(token?: string): HeadersInit {
 }
 
 /**
- * Tests GitLab connection and verifies Personal Access Token
+ * 驗證 GitLab Personal Access Token（GET /api/v4/user），回傳 Token 所屬使用者。
+ * Base URL 留空時預設 https://gitlab.com；網路錯誤（含 CORS）與非 2xx 皆轉成可直接顯示的錯誤訊息。
  */
-export async function testGitLabConnection(baseUrl: string, token: string): Promise<{ username: string; name: string }> {
-  const cleanBase = baseUrl.replace(/\/$/, '');
-  const res = await gitlabFetch(`${cleanBase}/api/v4/user`, {
-    headers: getHeaders(token),
-  });
+export async function verifyGitlabToken(
+  baseUrl: string,
+  token: string
+): Promise<{ id: number; username: string; name: string }> {
+  if (!token || !token.trim()) {
+    throw new Error('請先填入 Personal Access Token');
+  }
+
+  const cleanBase = (baseUrl.trim() || 'https://gitlab.com').replace(/\/+$/, '');
+  const url = `${cleanBase}/api/v4/user`;
+  const warning = getMixedContentWarning(url);
+  if (warning) {
+    throw new Error(warning);
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: getHeaders(token) });
+  } catch {
+    throw new Error('無法連線至 GitLab：請檢查 Base URL、網路或該站台是否允許跨來源 (CORS) 存取');
+  }
 
   if (!res.ok) {
     if (res.status === 401) {
-      throw new Error('GitLab Personal Access Token 無效或已過期 (401 Unauthorized)');
+      throw new GitLabApiError('GitLab Personal Access Token 無效或已過期 (401 Unauthorized)', res.status);
     }
-    throw new Error(`GitLab 連線失敗 (${res.status})`);
+    if (res.status === 403) {
+      throw new GitLabApiError('GitLab Token 權限不足 (403)，請確認至少具備 read_user 或 read_api scope', res.status);
+    }
+    throw new GitLabApiError(`GitLab 連線失敗 (${res.status})`, res.status);
   }
 
   const user = await res.json();
-  return { username: user.username, name: user.name };
+  return { id: user.id, username: user.username, name: user.name };
 }
 
 /**
