@@ -476,7 +476,8 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
           ) : (
             <>
               <Sparkles className={`w-4 h-4 ${hasResult ? 'text-primary' : 'text-indigo-200'}`} />
-              <span>{hasResult ? '重新分析' : '分析'}</span>
+              {/* 有結果時仍只分析輸入框目前的 diff（onAnalyze），不重新抓 MR；與過期卡片／新 commit 提示列的「重新分析」區分 */}
+              <span>{hasResult ? '分析目前的 diff' : '分析'}</span>
             </>
           )}
         </button>
