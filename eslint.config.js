@@ -1,18 +1,22 @@
 import js from '@eslint/js';
 import babelParser from '@babel/eslint-parser';
-import importPlugin from 'eslint-plugin-import';
+import importX, { createNodeResolver } from 'eslint-plugin-import-x';
 import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 
-// typescript-eslint 目前不支援 TypeScript 7.0（載入時直接丟錯），
+// 暫時做法（追蹤於 #77）：typescript-eslint 目前不支援 TypeScript 7.0（載入時直接丟錯），
 // 因此改用 @babel/eslint-parser 只做語法解析，不使用型別資訊。
 // 型別檢查仍由 `npm run typecheck`（tsc）負責。
+// Babel 設定只寫在這裡（babelrc/configFile 皆關閉），不放 babel.config.* 檔，
+// 避免 vite / vitest 讀到；Babel 套件只用於 lint，不參與 build。
 const babelTsParserOptions = {
   requireConfigFile: false,
   babelOptions: {
     babelrc: false,
     configFile: false,
     presets: ['@babel/preset-typescript'],
+    // JSX 只在 .tsx 開啟，避免 .ts 裡的 `<T>value` 型別斷言被當成 JSX
+    overrides: [{ test: /\.tsx$/, presets: ['@babel/preset-react'] }],
   },
 };
 
@@ -32,12 +36,10 @@ export default [
     },
     plugins: {
       'react-hooks': reactHooks,
-      import: importPlugin,
+      'import-x': importX,
     },
     settings: {
-      'import/resolver': {
-        node: { extensions: ['.ts', '.tsx', '.js'] },
-      },
+      'import-x/resolver-next': [createNodeResolver({ extensions: ['.ts', '.tsx', '.js'] })],
     },
     rules: {
       // 未定義與未使用變數交給 tsc 檢查：Babel 的 scope 分析不認得型別名稱與 JSX 用法，
@@ -53,7 +55,7 @@ export default [
       'react-hooks/exhaustive-deps': 'warn',
 
       // 依賴方向：非 UI 層不得 import UI 層
-      'import/no-restricted-paths': [
+      'import-x/no-restricted-paths': [
         'error',
         {
           zones: [
