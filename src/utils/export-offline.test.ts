@@ -16,7 +16,7 @@ import { getProviderSettings, normalizeSettings } from '../core/settings-store';
 import { AppSettings } from '../types/settings';
 import { GitLabMergeRequestInfo, GitLabNote } from '../types/gitlab';
 import { MRAnalysisResult } from '../types/review';
-import { generateOfflineHtmlReport } from './export-offline';
+import { generateOfflineHtmlReport, REDACTED, redactSecrets, toExportableResult } from './export-offline';
 
 const FAKE = {
   gitlab: 'FAKE-GITLAB-TOKEN-1234567890abcdef',
@@ -236,5 +236,159 @@ describe('generateOfflineHtmlReport 不含 key / token（#52）', () => {
       ['category', 'codeSnippet', 'comment', 'file', 'groupId', 'line', 'severity', 'suggestion'].sort()
     );
     expect(parsed.groups[0]).toEqual(VALID_RESULT.groups[0]);
+  });
+});
+
+
+/**
+ * Issue #65：模型把 token 原文寫進意見時，匯出前要遮罩。
+ * 測試值一律含 FAKE-；前綴與本體在執行期才拼接，原始碼裡沒有完整的 token 樣式（gitleaks 不會誤報）。
+ */
+const fakeToken = (prefix: string, body: string) => `${prefix}${body}`;
+const SECRET_SAMPLES: Record<string, string> = {
+  'GitLab glpat-': fakeToken('glpat-', 'FAKE-0a1B2c3D4e5F6g7H8i9J'),
+  'GitLab gldt-': fakeToken('gldt-', 'FAKE-0a1B2c3D4e5F6g7H8i9J'),
+  'GitHub ghp_': fakeToken('ghp_', 'FAKE-0a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P'),
+  'GitHub github_pat_': fakeToken('github_pat_', 'FAKE_0a1B2c3D4e5F6g7H8i9J_0k1L2m3N4o5P'),
+  'Google AIza': fakeToken('AIza', 'FAKE-0a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5'),
+  'OpenAI sk-': fakeToken('sk-', 'FAKE-0a1B2c3D4e5F6g7H8i9J0k1L'),
+  'OpenAI sk-proj-': fakeToken('sk-', 'proj-FAKE-0a1B2c3D4e5F6g7H8i9J0k1L'),
+  'Anthropic sk-ant-': fakeToken('sk-', 'ant-api03-FAKE-0a1B2c3D4e5F6g7H8i9J0k1L'),
+  'Slack xoxb-': fakeToken('xoxb-', 'FAKE-1234567890-0a1B2c3D4e'),
+  'Slack xoxp-': fakeToken('xoxp-', 'FAKE-1234567890-0a1B2c3D4e'),
+  'AWS AKIA': fakeToken('AKIA', 'FAKE-0A1B2C3D4E5F6G'),
+  Bearer: fakeToken('Bearer ', 'FAKE-0a1B2c3D4e5F6g7H'),
+  JWT: [fakeToken('eyJ', 'FAKE-hbGciOiJIUzI1NiJ9'), fakeToken('eyJ', 'FAKE-zdWIiOiIxMjM0In0'), 'FAKE-s1g2N3a4T5u6R7e8'].join('.'),
+  '高熵長字串': fakeToken('FAKE-', 'q7Zx9Lm2Np4Rt6Vw8Yb1Cd3Ef5Gh0Jk'),
+};
+/** 每個假值去掉前綴後的本體（遮罩後不能留下） */
+const secretBody = (value: string) => value.slice(value.indexOf('FAKE'));
+
+describe('redactSecrets：遮罩看起來像 token / key 的字串（#65）', () => {
+  it.each(Object.entries(SECRET_SAMPLES))('%s', (_name, secret) => {
+    const masked = redactSecrets(`請移除寫死的憑證 ${secret}，改讀環境變數。`);
+    expect(masked).not.toContain(secretBody(secret));
+    expect(masked).toContain(REDACTED);
+    expect(masked).toMatch(/^請移除寫死的憑證 .*，改讀環境變數。$/);
+  });
+
+  it('前綴格式保留前綴，讓讀者知道是哪一種憑證', () => {
+    expect(redactSecrets(SECRET_SAMPLES['GitLab glpat-'])).toBe(`glpat-${REDACTED}`);
+    expect(redactSecrets(SECRET_SAMPLES.Bearer)).toBe(`Bearer ${REDACTED}`);
+  });
+
+  it('鍵值形式（token=、"api_key": 、PRIVATE-TOKEN:）的隨機值會遮，鍵名保留', () => {
+    const value = 'FAKE-9f8E7d6C5b4A3z';
+    const samples = [
+      ['token', '=', value],
+      ['"api_key"', ': "', value + '"'],
+      ['PRIVATE-TOKEN', ': ', value],
+      ['password', ' = \'', value + "'"],
+    ].map((parts) => parts.join(''));
+    for (const sample of samples) {
+      const masked = redactSecrets(`const config = ${sample};`);
+      expect(masked).not.toContain(value);
+      expect(masked).toContain(REDACTED);
+    }
+  });
+
+  it('一般程式碼不誤遮', () => {
+    const code = [
+      'const token = getToken();',
+      'headers: { Authorization: `Bearer ${token}` }',
+      'const apiKey = process.env.GITLAB_TOKEN;',
+      'password: string;',
+      '<div className="sk-skeleton animate-pulse" />',
+      'export function useCouponRedemptionWithAbortController() {}',
+      'const MAX_RETRY_COUNT_FOR_SHARED_ANALYSIS_2026 = 3;',
+      'import { calculateFinalTotal } from "../utils/discountCalculator";',
+      'src/components/CouponInput.tsx',
+      'commit d1614bb0a5c3e2f4b6d8a0c2e4f6a8b0c2d4e6f8',
+      'grid-cols-[minmax(0,1fr)_auto]',
+      '請改用 AbortController，並在 AKIA 開頭的金鑰外洩時輪替。',
+      'const total = (page - 1) * pageSize + 100000;',
+    ];
+    for (const line of code) expect(redactSecrets(line)).toBe(line);
+  });
+});
+
+describe('匯出遮罩 finding 自由文字中的 token（#65）', () => {
+  const secrets = Object.values(SECRET_SAMPLES);
+  const leaky = (): MRAnalysisResult => ({
+    ...VALID_RESULT,
+    reviews: [
+      {
+        groupId: 'g1',
+        category: 'bug',
+        severity: 'high',
+        file: 'src/api/client.ts',
+        line: 3,
+        codeSnippet: `const headers = { Authorization: '${SECRET_SAMPLES.Bearer}' };`,
+        comment: `這裡寫死了 ${SECRET_SAMPLES['GitLab glpat-']} 與 ${SECRET_SAMPLES['Google AIza']}`,
+        suggestion: `移除 ${SECRET_SAMPLES['OpenAI sk-']}、${SECRET_SAMPLES['高熵長字串']}，改讀環境變數`,
+      },
+    ],
+    summary: [`摘要提到 ${SECRET_SAMPLES['GitHub ghp_']}`],
+    testSuggestions: [`測試不要用 ${SECRET_SAMPLES['Slack xoxb-']}`],
+  });
+
+  it('toExportableResult 遮罩 comment、suggestion、codeSnippet 與其他自由文字', () => {
+    const out = toExportableResult(leaky());
+    const review = out.reviews[0];
+    expect(review.comment).toBe(`這裡寫死了 glpat-${REDACTED} 與 AIza${REDACTED}`);
+    expect(review.suggestion).toBe(`移除 sk-${REDACTED}、${REDACTED}，改讀環境變數`);
+    expect(review.codeSnippet).toBe(`const headers = { Authorization: 'Bearer ${REDACTED}' };`);
+    expect(out.summary[0]).toBe(`摘要提到 ghp_${REDACTED}`);
+    expect(out.testSuggestions[0]).toBe(`測試不要用 xoxb-${REDACTED}`);
+    // 非自由文字欄位不變
+    expect(review.file).toBe('src/api/client.ts');
+    expect(review.line).toBe(3);
+  });
+
+  it('離線 HTML（含完整 JSON）不出現任何假值本體，正常內容仍在', () => {
+    const html = generateOfflineHtmlReport(leaky());
+    const used = secrets.filter((secret) => JSON.stringify(leaky()).includes(secret));
+    expect(used.length).toBeGreaterThanOrEqual(7);
+    for (const secret of used) expect(html).not.toContain(secretBody(secret));
+    expect(html).toContain('這裡寫死了 glpat-');
+    expect(html).toContain('新增分頁');
+  });
+
+  it('不改動呼叫端傳入的結果', () => {
+    const input = leaky();
+    toExportableResult(input);
+    expect(input.reviews[0].comment).toContain(secretBody(SECRET_SAMPLES['GitLab glpat-']));
+  });
+});
+
+describe('離線 HTML 的 category 做 HTML 跳脫（#65）', () => {
+  const review: MRAnalysisResult['reviews'][number] = {
+    groupId: 'g1',
+    category: 'bug',
+    severity: 'medium',
+    file: 'src/hooks/usePagination.ts',
+    line: 2,
+    codeSnippet: 'const start = page * pageSize;',
+    comment: 'page 從 1 開始',
+    suggestion: '改成 (page - 1) * pageSize',
+  };
+
+  it('category 夾帶 HTML 時不會變成標籤', () => {
+    const html = generateOfflineHtmlReport({
+      ...VALID_RESULT,
+      reviews: [
+        {
+          ...review,
+          category: '<img src=x onerror="alert(1)">' as never,
+        },
+      ],
+    });
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('分類: &lt;img src=x onerror=&quot;alert(1)&quot;&gt;');
+  });
+
+  it('一般 category 照常顯示', () => {
+    const html = generateOfflineHtmlReport({ ...VALID_RESULT, reviews: [review] });
+    expect(html).toContain('分類: bug');
   });
 });
