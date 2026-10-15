@@ -45,12 +45,12 @@ const RESULT: MRAnalysisResult = {
 let container: HTMLDivElement;
 let root: ReactRoot;
 
-function Harness({ initialDrafts = {} }: { initialDrafts?: DraftEdits }) {
+function Harness({ initialDrafts = {}, result = RESULT }: { initialDrafts?: DraftEdits; result?: MRAnalysisResult }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [drafts, setDrafts] = useState<DraftEdits>(initialDrafts);
   return (
     <AnalysisResultView
-      result={RESULT}
+      result={result}
       mrUrl="https://gitlab.example.com/g/p/-/merge_requests/1"
       isGitLabConfigured
       onPublishSingleReview={() => {}}
@@ -80,8 +80,22 @@ const byLabel = <T extends Element = HTMLElement>(label: string) => {
 };
 
 const cards = () => Array.from(container.querySelectorAll<HTMLElement>('div[tabindex="0"]'));
-/** 卡片第一列裡勾選框、嚴重度、檔名那一組（淡化套在這裡） */
-const headerGroupOf = (card: HTMLElement) => card.firstElementChild!.firstElementChild as HTMLElement;
+
+/** 元素自己與卡片內所有祖先是否有一層 opacity-50（happy-dom 不算 Tailwind 樣式，只能看 class；實際效果由 e2e 量） */
+const dimmedWithinCard = (el: Element) => {
+  for (let n: Element | null = el; n && n.getAttribute('tabindex') !== '0'; n = n.parentElement) {
+    if (n.classList.contains('opacity-50')) return true;
+  }
+  return false;
+};
+const blocksOf = (card: HTMLElement) => ({
+  severity: Array.from(card.querySelectorAll('span')).find((s) => s.textContent === '重大')!,
+  fileLine: card.querySelector('button[title*="程式碼片段"]')!,
+  suggestion: Array.from(card.querySelectorAll('div')).find((d) => d.textContent?.trim() === '修改建議：')!,
+  category: Array.from(card.querySelectorAll('span')).find((s) => s.textContent === 'Bug 風險')!,
+  checkbox: card.querySelector('button[aria-label^="勾選此意見："]')!,
+  edit: card.querySelector('button[aria-label="編輯草稿"]')!,
+});
 
 beforeEach(() => {
   container = document.createElement('div');
@@ -104,24 +118,49 @@ describe('意見清單的提示與 label', () => {
     expect(hint.className).toContain('text-muted-light');
   });
 
-  it('勾選框有 aria-label（含檔名與行號），編輯框有 aria-label「編輯審查意見內文」', async () => {
+  it('勾選框 aria-label 的行號和畫面上顯示的一致（修正後的行號，不是 AI 原始行號）', async () => {
     await render(<Harness />);
     expect(byLabel('勾選此意見：src/cart.ts:L10').getAttribute('aria-pressed')).toBe('false');
-    expect(byLabel('勾選此意見：src/b.ts').getAttribute('aria-pressed')).toBe('false');
+    expect(byLabel('勾選此意見：src/b.ts:行號未驗證').getAttribute('aria-pressed')).toBe('false');
 
-    await click(cards()[0].querySelector('button[aria-label="編輯草稿"]')!);
-    const textarea = byLabel<HTMLTextAreaElement>('編輯審查意見內文');
-    expect(textarea.tagName).toBe('TEXTAREA');
-    expect(textarea.value).toBe('折扣金額未檢查負數');
+    // AI 標 L7、依程式碼片段修正為 L12：label 用 L12
+    await render(<Harness key="ai-line" result={{ ...RESULT, reviews: [review({ line: 12, newLine: 12, aiLine: 7 })] }} />);
+    const card = cards()[0];
+    const shown = card.querySelector('button[title*="程式碼片段"]')!;
+    expect(shown.textContent).toContain('src/cart.ts:L12');
+    expect(shown.textContent).toContain('（AI 標 L7）');
+    expect(card.querySelector('button[aria-label^="勾選此意見："]')!.getAttribute('aria-label')).toBe('勾選此意見：src/cart.ts:L12');
   });
 
-  it('內文清空的卡片淡化；編輯中不淡化，內文非空的卡片也不淡化', async () => {
-    await render(<Harness initialDrafts={{ 0: { comment: '  ', suggestion: '' } }} />);
-    expect(headerGroupOf(cards()[0]).className).toContain('opacity-50');
-    expect(headerGroupOf(cards()[1]).className).not.toContain('opacity-50');
-
+  it('編輯框以 aria-labelledby 連到畫面上看得到的 label，不用 aria-label 蓋掉', async () => {
+    await render(<Harness />);
     await click(cards()[0].querySelector('button[aria-label="編輯草稿"]')!);
-    expect(headerGroupOf(cards()[0]).className).not.toContain('opacity-50');
+    const [commentBox, suggestionBox] = Array.from(cards()[0].querySelectorAll('textarea'));
+    expect(commentBox.hasAttribute('aria-label')).toBe(false);
+    expect(suggestionBox.hasAttribute('aria-label')).toBe(false);
+    const labelOf = (el: Element) => document.getElementById(el.getAttribute('aria-labelledby')!)!;
+    expect(labelOf(commentBox).tagName).toBe('LABEL');
+    expect(labelOf(commentBox).textContent?.trim()).toBe('意見評論內文 (Comment)：');
+    expect(labelOf(suggestionBox).textContent?.trim()).toBe('修改動作與建議 (Suggestion)：');
+    expect(commentBox.value).toBe('折扣金額未檢查負數');
+  });
+
+  it('內文清空的卡片：嚴重度、檔名行號、修改建議、標籤都淡化，勾選框與編輯按鈕不淡化；編輯中與內文非空的卡片不淡化', async () => {
+    await render(<Harness initialDrafts={{ 0: { comment: '  ', suggestion: '加上 Math.max(0, discount)' } }} />);
+    const dimmed = blocksOf(cards()[0]);
+    for (const key of ['severity', 'fileLine', 'suggestion', 'category'] as const) {
+      expect(dimmedWithinCard(dimmed[key]), key).toBe(true);
+    }
+    expect(dimmedWithinCard(dimmed.checkbox)).toBe(false);
+    expect(dimmed.checkbox.className).not.toContain('disabled:opacity-40');
+    expect(dimmedWithinCard(dimmed.edit)).toBe(false);
+    expect(cards()[0].className).not.toContain('opacity-50');
+
+    const normal = blocksOf(cards()[1]);
+    for (const key of ['severity', 'fileLine', 'category'] as const) expect(dimmedWithinCard(normal[key]), key).toBe(false);
+
+    await click(dimmed.edit);
+    expect(dimmedWithinCard(blocksOf(cards()[0]).fileLine)).toBe(false);
   });
 });
 

@@ -42,7 +42,7 @@ test('審查意見顯示檔案、行號與操作按鈕', async ({page}) => {
   await expect(page.getByText('避免在非同步請求未完成前組件卸載造成狀態更新報錯。')).toBeVisible();
   await expect(page.getByRole('button', {name: /src\/hooks\/useCouponRedemption\.ts\s*:L19\s*（AI 標 L21）/})).toBeVisible();
   // 行號依程式碼片段修正；對不上 diff 的那則標示行號未驗證
-  await expect(page.getByRole('button', {name: /src\/tests\/discountCalculator\.test\.ts\s*:行號未驗證/})).toBeVisible();
+  await expect(page.getByRole('button', {name: /^src\/tests\/discountCalculator\.test\.ts\s*:行號未驗證/})).toBeVisible();
   await expect(page.getByText('行號未驗證', {exact: true}).first()).toBeVisible();
   await expect(page.getByRole('button', {name: '編輯草稿'}).first()).toBeVisible();
   await expect(page.getByRole('button', {name: '複製意見'}).first()).toBeVisible();

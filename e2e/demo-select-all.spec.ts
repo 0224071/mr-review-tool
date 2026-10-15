@@ -72,7 +72,7 @@ test('全選勾到所有內文非空的意見（含行號未驗證），N 與確
   // 清空第一則意見的內文
   const firstCheckbox = checkboxes(page).first();
   await page.getByRole('button', {name: '編輯草稿'}).first().click();
-  const commentBox = page.getByLabel('編輯審查意見內文');
+  const commentBox = page.getByLabel('意見評論內文 (Comment)：');
   await expect(commentBox).toHaveCount(1);
   expect((await commentBox.inputValue()).trim()).not.toBe('');
   await commentBox.fill('');

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useId, useState, useMemo } from 'react';
 import {
   AlertTriangle,
   Bug,
@@ -112,6 +112,10 @@ const SEVERITY_META: Record<
 };
 
 /** 單則發布與重試入口：有發布作業進行中（或此則發送中）時忽略點擊 */
+/** 畫面上檔名後顯示的行號（修正後的 line）；勾選框的 aria-label 也用這個，讀到的和看到的一致 */
+export const displayLineText = (review: Pick<MRReviewItem, 'line' | 'lineVerified'>): string =>
+  review.line !== null ? `:L${review.line}` : review.lineVerified === false ? ':行號未驗證' : '';
+
 export const runUnlessPublishing = (blocked: boolean, action: () => void) => {
   if (!blocked) action();
 };
@@ -263,6 +267,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
 
   // 手機點到停用的按鈕時，在該則卡片顯示原因
   const [disabledHint, showDisabledHint] = useDisabledReason<number>();
+  const labelIdPrefix = useId();
 
   /** 內文（草稿優先）是空的，不能勾選、複製或發布 */
   const isCommentEmpty = (index: number) =>
@@ -412,8 +417,13 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
             };
             const isDraftModified = !!draftEdits[originalIndex];
             const commentEmpty = isCommentEmpty(originalIndex);
-            // 內文空了（且不在編輯中）時卡片淡化，只留提示醒目
+            // 內文空了（且不在編輯中）時卡片內容淡化，只留提示醒目；
+            // 勾選框、操作按鈕不淡化（要點得到、看得到），所以淡化套在各內容區塊上，不套在卡片或整列容器
             const dimmed = commentEmpty && !isEditing;
+            const dimClass = `transition-opacity ${dimmed ? 'opacity-50' : ''}`;
+            const lineText = displayLineText(review);
+            const commentLabelId = `${labelIdPrefix}-comment-${originalIndex}`;
+            const suggestionLabelId = `${labelIdPrefix}-suggestion-${originalIndex}`;
             const emptyReason = commentEmpty ? EMPTY_COMMENT_REASON : null;
             const showReason = (message: string) => showDisabledHint(originalIndex, message);
 
@@ -433,16 +443,18 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
               >
                 {/* Header Row: Checkbox, Severity, File:Line；右側為操作按鈕 */}
                 <div className="flex items-start justify-between gap-2">
-                  <div className={`flex flex-wrap items-start gap-2 flex-1 min-w-0 transition-opacity ${dimmed ? 'opacity-50' : ''}`}>
+                  <div className="flex flex-wrap items-start gap-2 flex-1 min-w-0">
                     {/* Item Checkbox */}
                     <TapForReason reason={emptyReason} onReason={showReason} className="mt-0.5 shrink-0">
                       <button
                         type="button"
                         onClick={() => handleToggleSelect(originalIndex)}
                         disabled={isSending || commentEmpty}
-                        className="text-slate-400 hover:text-primary disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
+                        className={`text-slate-400 hover:text-primary disabled:pointer-events-none transition-colors cursor-pointer ${
+                          dimmed ? '' : 'disabled:opacity-40'
+                        }`}
                         title={commentEmpty ? EMPTY_COMMENT_MESSAGE : isPublished ? '已發布過，勾選將重複發布' : '勾選此意見'}
-                        aria-label={`勾選此意見：${review.file}${review.line !== null ? `:L${review.line}` : ''}`}
+                        aria-label={`勾選此意見：${review.file}${lineText}`}
                         aria-pressed={isSelected}
                       >
                         {isSelected ? (
@@ -455,7 +467,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
 
                     {/* Severity Badge */}
                     <span
-                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold text-[10px] border shrink-0 mt-0.5 ${sevMeta.badge}`}
+                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold text-[10px] border shrink-0 mt-0.5 ${sevMeta.badge} ${dimClass}`}
                     >
                       <span className={`w-1.5 h-1.5 rounded-full ${sevMeta.dot}`} />
                       {sevMeta.label}
@@ -463,7 +475,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
 
                     {isPublished && (
                       <span
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold text-[10px] border shrink-0 mt-0.5 text-success-text bg-success-subtle border-success-border"
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold text-[10px] border shrink-0 mt-0.5 text-success-text bg-success-subtle border-success-border ${dimClass}`}
                         title={
                           publishedMatch?.source === 'remote'
                             ? 'MR 上已有相同內容的留言'
@@ -479,15 +491,13 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     <button
                       type="button"
                       onClick={() => toggleCodeExpanded(originalIndex)}
-                      className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-600 bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded border border-slate-200 transition-colors shrink-0 max-w-full mt-0.5 cursor-pointer"
+                      className={`inline-flex items-center gap-1 font-mono text-[11px] text-slate-600 bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded border border-slate-200 transition-colors shrink-0 max-w-full mt-0.5 cursor-pointer ${dimClass}`}
                       title={expandedCodeIndices.has(originalIndex) ? '收合程式碼片段' : '展開前後 5 行程式碼片段'}
                     >
                       <FileCode className="w-3 h-3 text-slate-500" />
                       <span className="font-semibold text-slate-800 truncate min-w-0">{review.file}</span>
-                      {review.line !== null ? (
-                        <span className="text-primary font-bold">:L{review.line}</span>
-                      ) : review.lineVerified === false && (
-                        <span className="text-amber-700 font-bold">:行號未驗證</span>
+                      {lineText && (
+                        <span className={`font-bold ${review.line !== null ? 'text-primary' : 'text-amber-700'}`}>{lineText}</span>
                       )}
                       {review.aiLine != null && review.aiLine !== review.line && (
                         <span
@@ -623,11 +633,11 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                 {isEditing && (
                   <div className="space-y-2 pt-1">
                     <div>
-                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                      <label id={commentLabelId} className="text-[11px] font-semibold text-slate-600 block mb-0.5">
                         意見評論內文 (Comment)：
                       </label>
                       <textarea
-                        aria-label="編輯審查意見內文"
+                        aria-labelledby={commentLabelId}
                         value={currentDraft.comment}
                         onChange={(e) => {
                           setDraftEdits((prev) => ({
@@ -646,10 +656,11 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-semibold text-primary block mb-0.5">
+                      <label id={suggestionLabelId} className="text-[11px] font-semibold text-primary block mb-0.5">
                         修改動作與建議 (Suggestion)：
                       </label>
                       <textarea
+                        aria-labelledby={suggestionLabelId}
                         value={currentDraft.suggestion}
                         onChange={(e) =>
                           setDraftEdits((prev) => ({
@@ -669,7 +680,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
 
                 {/* Suggestion Callout：建議為空時整段不顯示 */}
                 {!isEditing && currentDraft.suggestion.trim() !== '' && (
-                  <div className="bg-primary-subtle/30 border border-primary-border/60 rounded-lg p-2.5 space-y-1">
+                  <div className={`bg-primary-subtle/30 border border-primary-border/60 rounded-lg p-2.5 space-y-1 ${dimClass}`}>
                     <div className="flex items-center gap-1 text-[11px] font-semibold text-primary">
                       <Sparkles className="w-3.5 h-3.5" />
                       修改建議：
@@ -690,7 +701,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                   );
 
                   return (
-                    <div className="rounded-lg border border-slate-700 bg-slate-900 overflow-hidden text-xs font-mono shadow-xs mt-2">
+                    <div className={`rounded-lg border border-slate-700 bg-slate-900 overflow-hidden text-xs font-mono shadow-xs mt-2 ${dimClass}`}>
                       <div className="px-3 py-1.5 bg-slate-800 border-b border-slate-700 flex items-center justify-between text-[11px] text-slate-300">
                         <span className="font-semibold flex items-center gap-1.5">
                           <FileCode className="w-3.5 h-3.5 text-slate-400" />
@@ -784,7 +795,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                 })()}
 
                 {/* Card Footer: Category, Group, Verified, and Status badges */}
-                <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[10px] text-muted">
+                <div className={`flex flex-wrap items-center gap-2 pt-0.5 text-[10px] text-muted ${dimClass}`}>
                   <span className="inline-flex items-center gap-1 text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
                     <CatIcon className="w-2.5 h-2.5" />
                     {catMeta.label}

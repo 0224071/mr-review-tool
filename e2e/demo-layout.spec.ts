@@ -39,7 +39,7 @@ const openDemoResult = async (page: Page) => {
 const setComment = async (page: Page, index: number, text: string) => {
   const card = cardOf(checkboxes(page).nth(index));
   await card.getByRole('button', {name: '編輯草稿'}).click();
-  await card.getByLabel('編輯審查意見內文').fill(text);
+  await card.getByLabel('意見評論內文 (Comment)：').fill(text);
   await card.getByRole('button', {name: '完成編輯'}).click();
   return card;
 };
