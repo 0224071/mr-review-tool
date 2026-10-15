@@ -1,10 +1,31 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Header } from './components/Header';
 import { DiffInputPanel } from './components/DiffInputPanel';
 import { AnalysisResultView } from './components/AnalysisResultView';
 import { SettingsModal } from './components/SettingsModal';
 import { DiffViewerModal } from './components/DiffViewerModal';
 import { PublishConfirmationModal } from './components/PublishConfirmationModal';
+import { HistoryDrawer } from './components/HistoryDrawer';
+import { ConfirmDialog } from './components/ConfirmDialog';
+import {
+  buildDiffHistoryKey,
+  buildMrHistoryKey,
+  DraftEdits,
+  formatHistoryTime,
+  hasNewCommit,
+  HistoryRecord,
+  HistorySourceType,
+  HistoryStore,
+  normalizeHost,
+  openHistoryStore,
+  PublishedRecord,
+  toMrSnapshot,
+} from './core/history-store';
+import {
+  createPublishedRecord,
+  defaultSelectedIndices,
+  findPublishedMatches,
+} from './core/publish-dedup';
 import { enrichGroupsWithParsedDiff, parseGitDiff } from './core/diff-parser';
 import { alignReviewsWithDiff } from './core/line-resolver';
 import { analyzeGitDiffWithGemini } from './services/gemini-service';
@@ -14,8 +35,10 @@ import { AppSettings, DEFAULT_SETTINGS } from './types/settings';
 import { MRAnalysisResult, MRReviewItem } from './types/review';
 import { DiffFile } from './types/diff';
 import {
+  GitLabDiffRefs,
   GitLabDiscussionPosition,
   GitLabMergeRequestInfo,
+  GitLabNote,
   ReviewPublishState,
 } from './types/gitlab';
 import {
@@ -31,9 +54,16 @@ import {
   SUMMARY_TAG,
   updateGitLabNote,
 } from './services/gitlab-api';
-import { AlertCircle, Info, Sparkles } from 'lucide-react';
+import { AlertCircle, DatabaseZap, Info, Sparkles } from 'lucide-react';
 
 const SETTINGS_STORAGE_KEY = 'gitlab_mr_reviewer_settings';
+
+type PublishItem = {
+  review: MRReviewItem;
+  customComment?: string;
+  customSuggestion?: string;
+  index: number;
+};
 
 export default function App() {
   // Load settings from localStorage
@@ -92,10 +122,212 @@ export default function App() {
     itemsToPublish: [],
   });
 
+  // 快取與歷史紀錄
+  const [historyStore, setHistoryStore] = useState<HistoryStore | null>(null);
+  // null = 檢查中；false = 此瀏覽器無法使用 IndexedDB
+  const [historyAvailable, setHistoryAvailable] = useState<boolean | null>(null);
+  const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
+  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
+  const [currentRecordId, setCurrentRecordId] = useState<string | null>(null);
+  const currentRecordIdRef = useRef<string | null>(null);
+  currentRecordIdRef.current = currentRecordId;
+  const [analyzedAt, setAnalyzedAt] = useState<number | null>(null);
+  // 產生目前結果的 diff 與 diff_refs（可能與左欄最新抓取的 diff 不同，例如 MR 有新 commit）
+  const [resultRawDiff, setResultRawDiff] = useState<string>('');
+  const [resultDiffRefs, setResultDiffRefs] = useState<GitLabDiffRefs | undefined>(undefined);
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [draftEdits, setDraftEdits] = useState<DraftEdits>({});
+  const [publishedRecords, setPublishedRecords] = useState<PublishedRecord[]>([]);
+  const [remoteNotes, setRemoteNotes] = useState<GitLabNote[]>([]);
+  const [duplicateWarning, setDuplicateWarning] = useState<{ count: number; items: PublishItem[] } | null>(null);
+
   // Parse diff on the fly
   const parsedDiff = useMemo(() => {
     return parseGitDiff(rawDiff);
   }, [rawDiff]);
+
+  const resultDiffFiles = useMemo(() => {
+    return resultRawDiff ? parseGitDiff(resultRawDiff).files : parsedDiff.files;
+  }, [resultRawDiff, parsedDiff]);
+
+  const publishedMatches = useMemo(() => {
+    if (!analysisResult) return {};
+    return findPublishedMatches(analysisResult.reviews, draftEdits, publishedRecords, remoteNotes);
+  }, [analysisResult, draftEdits, publishedRecords, remoteNotes]);
+
+  const currentRecord = useMemo(
+    () => historyRecords.find((r) => r.id === currentRecordId) ?? null,
+    [historyRecords, currentRecordId]
+  );
+
+  const refreshHistory = useCallback(async (store: HistoryStore | null = historyStore) => {
+    if (!store) return;
+    try {
+      setHistoryRecords(await store.list());
+    } catch {
+      // ignore
+    }
+  }, [historyStore]);
+
+  // App 啟動：開啟 IndexedDB 並清理過期／超量紀錄
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const store = await openHistoryStore();
+      if (cancelled) return;
+      if (!store) {
+        setHistoryAvailable(false);
+        return;
+      }
+      try {
+        await store.prune();
+        const list = await store.list();
+        if (cancelled) return;
+        setHistoryRecords(list);
+        setHistoryStore(store);
+        setHistoryAvailable(true);
+      } catch {
+        if (!cancelled) setHistoryAvailable(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 勾選、編輯、發布狀態變動時寫回目前紀錄（update 不會重建已刪除的紀錄）
+  useEffect(() => {
+    if (!historyStore || !currentRecordId) return;
+    historyStore
+      .update(currentRecordId, {
+        selectedIndices: Array.from(selectedIndices),
+        draftEdits,
+        published: publishedRecords,
+        summaryPublished: isSummaryPublished,
+        sharedPublished: isSharedToMrPublished,
+      })
+      .catch(() => {
+        // ignore
+      });
+  }, [
+    historyStore,
+    currentRecordId,
+    selectedIndices,
+    draftEdits,
+    publishedRecords,
+    isSummaryPublished,
+    isSharedToMrPublished,
+  ]);
+
+  const resetToEmpty = () => {
+    setAnalysisResult(null);
+    setCurrentRecordId(null);
+    setAnalyzedAt(null);
+    setResultRawDiff('');
+    setResultDiffRefs(undefined);
+    setSelectedIndices(new Set());
+    setDraftEdits({});
+    setPublishedRecords([]);
+    setRemoteNotes([]);
+    setPublishStates({});
+    setIsSummaryPublished(false);
+    setIsSharedToMrPublished(false);
+    setRawDiff('');
+    setCurrentGitLabMr(null);
+    setGitlabMrUrl('');
+    setSharedAnalysisAvailable(null);
+  };
+
+  /** 把一筆歷史紀錄套用到畫面（不呼叫 Gemini） */
+  const applyRecord = (record: HistoryRecord) => {
+    setAnalysisResult(record.result);
+    setCurrentRecordId(record.id);
+    setAnalyzedAt(record.analyzedAt);
+    setResultRawDiff(record.rawDiff);
+    setResultDiffRefs(record.mr?.diff_refs);
+    setSelectedIndices(new Set(record.selectedIndices));
+    setDraftEdits(record.draftEdits || {});
+    setPublishedRecords(record.published || []);
+    setPublishStates({});
+    setIsSummaryPublished(!!record.summaryPublished);
+    setIsSharedToMrPublished(!!record.sharedPublished);
+    setErrorMessage(null);
+  };
+
+  /** 依目前來源計算歷史紀錄 key 與中繼資料 */
+  const describeSource = (diffText: string, mr: GitLabMergeRequestInfo | null) => {
+    if (mr) {
+      try {
+        const parsed = parseGitLabMrUrl(mr.web_url, settings.gitlabBaseUrl || 'https://gitlab.com');
+        return {
+          id: buildMrHistoryKey(parsed.baseUrl, parsed.projectPath, parsed.mrIid),
+          sourceType: 'gitlab' as HistorySourceType,
+          host: normalizeHost(parsed.baseUrl),
+          projectPath: parsed.projectPath,
+          mrIid: parsed.mrIid,
+        };
+      } catch {
+        // 無法解析時退回以 diff hash 當 key
+      }
+    }
+    const isSample = diffText.trim() === SAMPLE_GIT_DIFF.trim();
+    return {
+      id: buildDiffHistoryKey(diffText),
+      sourceType: (isSample ? 'sample' : 'manual') as HistorySourceType,
+    };
+  };
+
+  /**
+   * 顯示一份新的分析結果並寫入歷史紀錄。
+   * 同一個 key 已有紀錄時（重新分析）保留已發布紀錄與釘選狀態。
+   */
+  const commitNewResult = async (
+    result: MRAnalysisResult,
+    diffText: string,
+    mr: GitLabMergeRequestInfo | null,
+    notes: GitLabNote[]
+  ) => {
+    const source = describeSource(diffText, mr);
+    let existing: HistoryRecord | undefined;
+    if (historyStore) {
+      try {
+        existing = await historyStore.get(source.id);
+      } catch {
+        existing = undefined;
+      }
+    }
+    const published = existing?.published ?? [];
+    const matches = findPublishedMatches(result.reviews, {}, published, notes);
+    const now = Date.now();
+    const record: HistoryRecord = {
+      ...source,
+      title: mr ? mr.title : result.title,
+      mrUrl: mr?.web_url,
+      mr: mr ? toMrSnapshot(mr) : undefined,
+      headSha: mr?.diff_refs?.head_sha ?? null,
+      latestHeadSha: mr?.diff_refs?.head_sha ?? null,
+      rawDiff: diffText,
+      analyzedAt: now,
+      result,
+      selectedIndices: Array.from(defaultSelectedIndices(result.reviews, matches)),
+      draftEdits: {},
+      published,
+      summaryPublished: false,
+      sharedPublished: false,
+      pinned: existing?.pinned ?? false,
+    };
+
+    if (historyStore) {
+      try {
+        await historyStore.put(record, now);
+        await refreshHistory();
+      } catch {
+        // 寫入失敗不影響顯示
+      }
+    }
+    applyRecord(record);
+    if (!historyStore) setCurrentRecordId(null);
+  };
 
   // Persist settings
   const handleSaveSettings = (newSettings: AppSettings) => {
@@ -107,7 +339,7 @@ export default function App() {
     }
   };
 
-  const handleAnalyze = async () => {
+  const runAnalysis = async (diffText: string, mr: GitLabMergeRequestInfo | null) => {
     if (!settings.geminiApiKey) {
       setIsSettingsOpen(true);
       return;
@@ -119,7 +351,7 @@ export default function App() {
 
     try {
       const result = await analyzeGitDiffWithGemini({
-        rawDiff,
+        rawDiff: diffText,
         apiKey: settings.geminiApiKey,
         model: settings.geminiModel,
         teamRules: settings.teamRules,
@@ -127,11 +359,7 @@ export default function App() {
           setBatchProgress({ current, total });
         },
       });
-      setAnalysisResult(result);
-      // Reset publishing states for new analysis
-      setPublishStates({});
-      setIsSummaryPublished(false);
-      setIsSharedToMrPublished(false);
+      await commitNewResult(result, diffText, mr, remoteNotes);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMessage(msg);
@@ -139,6 +367,119 @@ export default function App() {
       setIsLoading(false);
       setBatchProgress(null);
     }
+  };
+
+  const handleAnalyze = async () => {
+    // 有快取（且不是正在顯示的那筆）就直接顯示，不呼叫 Gemini；
+    // 正在顯示的紀錄再按「分析」視為使用者要求重新分析。
+    if (historyStore && rawDiff.trim()) {
+      const source = describeSource(rawDiff, currentGitLabMr);
+      if (source.id !== currentRecordId) {
+        try {
+          const cached = await historyStore.get(source.id);
+          const currentHead = currentGitLabMr?.diff_refs?.head_sha;
+          const sameVersion = !cached?.headSha || !currentHead || cached.headSha === currentHead;
+          if (cached && sameVersion) {
+            applyRecord(cached);
+            return;
+          }
+        } catch {
+          // 讀取失敗就照常分析
+        }
+      }
+    }
+    await runAnalysis(rawDiff, currentGitLabMr);
+  };
+
+  /** 新 commit 提示列的「重新分析」：先抓最新 MR 與 diff，再分析 */
+  const handleReanalyze = async () => {
+    const mrUrl = currentGitLabMr?.web_url;
+    if (!mrUrl) {
+      await runAnalysis(rawDiff, currentGitLabMr);
+      return;
+    }
+    if (!settings.geminiApiKey) {
+      setIsSettingsOpen(true);
+      return;
+    }
+    setIsFetchingGitLab(true);
+    setGitlabError(null);
+    let latestMr: GitLabMergeRequestInfo;
+    let latestDiff: string;
+    try {
+      const { baseUrl, projectPath, mrIid } = parseGitLabMrUrl(mrUrl, settings.gitlabBaseUrl || 'https://gitlab.com');
+      latestMr = await fetchGitLabMergeRequest(baseUrl, settings.gitlabToken, projectPath, mrIid);
+      latestDiff = await fetchGitLabMrRawDiff(baseUrl, settings.gitlabToken, projectPath, mrIid);
+      setCurrentGitLabMr(latestMr);
+      setGitlabMrUrl(latestMr.web_url);
+      setRawDiff(latestDiff);
+    } catch (err: unknown) {
+      setGitlabError(err instanceof Error ? err.message : String(err));
+      return;
+    } finally {
+      setIsFetchingGitLab(false);
+    }
+    await runAnalysis(latestDiff, latestMr);
+  };
+
+  /** 從抽屜開啟紀錄；MR 紀錄會在背景確認是否有新 commit 並讀取現有留言 */
+  const handleOpenRecord = async (id: string) => {
+    if (!historyStore) return;
+    const record = await historyStore.get(id).catch(() => undefined);
+    if (!record) {
+      await refreshHistory();
+      return;
+    }
+    setIsHistoryOpen(false);
+    applyRecord(record);
+    setRawDiff(record.rawDiff);
+    setCurrentGitLabMr(record.mr ? (record.mr as GitLabMergeRequestInfo) : null);
+    setGitlabMrUrl(record.mrUrl ?? '');
+    setRemoteNotes([]);
+    setSharedAnalysisAvailable(null);
+    setGitlabError(null);
+
+    if (record.sourceType !== 'gitlab' || !record.mrUrl) return;
+    try {
+      const { baseUrl, projectPath, mrIid } = parseGitLabMrUrl(
+        record.mrUrl,
+        settings.gitlabBaseUrl || 'https://gitlab.com'
+      );
+      const [latestMr, notes] = await Promise.all([
+        fetchGitLabMergeRequest(baseUrl, settings.gitlabToken, projectPath, mrIid),
+        fetchGitLabMrNotes(baseUrl, settings.gitlabToken, projectPath, mrIid),
+      ]);
+      if (currentRecordIdRef.current !== id) return;
+      setRemoteNotes(notes);
+      const latestHead = latestMr.diff_refs?.head_sha ?? null;
+      if (latestHead && latestHead !== record.latestHeadSha) {
+        await historyStore.update(id, { latestHeadSha: latestHead });
+        await refreshHistory();
+      }
+    } catch {
+      // 連不到 GitLab 時仍顯示快取結果
+    }
+  };
+
+  const handleTogglePin = async (id: string) => {
+    if (!historyStore) return;
+    const record = historyRecords.find((r) => r.id === id);
+    await historyStore.update(id, { pinned: !record?.pinned }).catch(() => undefined);
+    await refreshHistory();
+  };
+
+  const handleDeleteRecord = async (id: string) => {
+    if (!historyStore) return;
+    await historyStore.remove(id).catch(() => undefined);
+    if (id === currentRecordId) resetToEmpty();
+    await refreshHistory();
+  };
+
+  const handleClearUnpinned = async () => {
+    if (!historyStore) return;
+    await historyStore.clearUnpinned().catch(() => 0);
+    if (currentRecord && !currentRecord.pinned) resetToEmpty();
+    await refreshHistory();
   };
 
   // Stage 2: Fetch MR and Notes from GitLab
@@ -171,15 +512,38 @@ export default function App() {
       );
       setRawDiff(fetchedDiff);
 
-      // 3. Check for previously shared analysis in notes
+      // 3. Check for previously shared analysis in notes（同時保留留言供重複發布比對）
+      let notes: GitLabNote[] = [];
       try {
-        const notes = await fetchGitLabMrNotes(baseUrl, settings.gitlabToken, projectPath, mrIid);
+        notes = await fetchGitLabMrNotes(baseUrl, settings.gitlabToken, projectPath, mrIid);
         const shared = findSharedAnalysisInNotes(notes);
         if (shared) {
           setSharedAnalysisAvailable(shared);
         }
       } catch {
         // notes checking failure does not block diff fetching
+      }
+      setRemoteNotes(notes);
+
+      // 4. 有快取就直接顯示，不呼叫 Gemini；切到沒有快取的 MR 時清掉前一個 MR 的結果
+      const key = buildMrHistoryKey(baseUrl, projectPath, mrIid);
+      const cached = historyStore ? await historyStore.get(key).catch(() => undefined) : undefined;
+      if (cached) {
+        const latestHead = mrInfo.diff_refs?.head_sha ?? null;
+        applyRecord(cached);
+        if (latestHead && latestHead !== cached.latestHeadSha && historyStore) {
+          await historyStore.update(key, { latestHeadSha: latestHead }).catch(() => undefined);
+        }
+        await refreshHistory();
+      } else if (currentRecordIdRef.current !== key) {
+        setAnalysisResult(null);
+        setCurrentRecordId(null);
+        setAnalyzedAt(null);
+        setResultRawDiff('');
+        setResultDiffRefs(undefined);
+        setPublishStates({});
+        setIsSummaryPublished(false);
+        setIsSharedToMrPublished(false);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -190,16 +554,15 @@ export default function App() {
   };
 
   // Stage 2: Load shared analysis from MR note (Mechanism 1: Free of Gemini API key)
-  const handleLoadSharedAnalysis = () => {
+  const handleLoadSharedAnalysis = async () => {
     if (sharedAnalysisAvailable) {
       const enrichedResult = {
         ...sharedAnalysisAvailable.result,
         groups: enrichGroupsWithParsedDiff(sharedAnalysisAvailable.result.groups, parsedDiff),
         reviews: alignReviewsWithDiff(sharedAnalysisAvailable.result.reviews || [], parsedDiff),
       };
-      setAnalysisResult(enrichedResult);
       setSharedAnalysisAvailable(null);
-      setErrorMessage(null);
+      await commitNewResult(enrichedResult, rawDiff, currentGitLabMr, remoteNotes);
     }
   };
 
@@ -220,10 +583,68 @@ export default function App() {
     setErrorMessage(null);
     setPublishStates({});
     setIsSummaryPublished(false);
+    setCurrentRecordId(null);
+    setAnalyzedAt(null);
+    setResultRawDiff(SAMPLE_GIT_DIFF);
+    setResultDiffRefs(undefined);
+    setSelectedIndices(defaultSelectedIndices(SAMPLE_ANALYSIS_RESULT.reviews, {}));
+    setDraftEdits({});
+    setPublishedRecords([]);
   };
 
   const handleOpenFileDiff = (file: DiffFile, line?: number | null) => {
     setInspectingDiff({ file, line });
+  };
+
+  const openPublishModal = (items: PublishItem[]) => {
+    setPublishModalConfig({
+      isPublishingSummary: false,
+      itemsToPublish: items,
+    });
+    setIsPublishModalOpen(true);
+  };
+
+  /**
+   * 發布前比對本地發布紀錄＋MR 現有留言；有重複時先跳橘色警告，按「仍要發布」才進原本的發布確認。
+   */
+  const requestPublishReviews = async (items: PublishItem[]) => {
+    if (!settings.gitlabToken) {
+      setIsSettingsOpen(true);
+      return;
+    }
+    if (!analysisResult || items.length === 0) return;
+
+    let notes = remoteNotes;
+    const targetMrUrl = currentGitLabMr?.web_url || gitlabMrUrl;
+    if (targetMrUrl) {
+      try {
+        const parsed = parseGitLabMrUrl(targetMrUrl, settings.gitlabBaseUrl || 'https://gitlab.com');
+        const fresh = await fetchGitLabMrNotes(parsed.baseUrl, settings.gitlabToken, parsed.projectPath, parsed.mrIid);
+        if (fresh.length > 0) {
+          notes = fresh;
+          setRemoteNotes(fresh);
+        }
+      } catch {
+        // 讀不到留言時只用本地紀錄與先前讀到的留言比對
+      }
+    }
+
+    const drafts: DraftEdits = { ...draftEdits };
+    items.forEach((item) => {
+      if (item.customComment !== undefined || item.customSuggestion !== undefined) {
+        drafts[item.index] = {
+          comment: item.customComment ?? item.review.comment,
+          suggestion: item.customSuggestion ?? item.review.suggestion,
+        };
+      }
+    });
+    const matches = findPublishedMatches(analysisResult.reviews, drafts, publishedRecords, notes);
+    const duplicateCount = items.filter((item) => matches[item.index]).length;
+    if (duplicateCount > 0) {
+      setDuplicateWarning({ count: duplicateCount, items });
+      return;
+    }
+    openPublishModal(items);
   };
 
   // Stage 2: Single Review Comment Publish Trigger
@@ -233,44 +654,19 @@ export default function App() {
     customSuggestion?: string,
     index?: number
   ) => {
-    if (!settings.gitlabToken) {
-      setIsSettingsOpen(true);
-      return;
-    }
-
-    setPublishModalConfig({
-      isPublishingSummary: false,
-      itemsToPublish: [
-        {
-          review,
-          customComment,
-          customSuggestion,
-          index: index !== undefined ? index : 0,
-        },
-      ],
-    });
-    setIsPublishModalOpen(true);
+    void requestPublishReviews([
+      {
+        review,
+        customComment,
+        customSuggestion,
+        index: index !== undefined ? index : 0,
+      },
+    ]);
   };
 
   // Stage 2: Batch Review Comments Publish Trigger
-  const handlePublishBatchReviews = (
-    items: Array<{
-      review: MRReviewItem;
-      customComment?: string;
-      customSuggestion?: string;
-      index: number;
-    }>
-  ) => {
-    if (!settings.gitlabToken) {
-      setIsSettingsOpen(true);
-      return;
-    }
-
-    setPublishModalConfig({
-      isPublishingSummary: false,
-      itemsToPublish: items,
-    });
-    setIsPublishModalOpen(true);
+  const handlePublishBatchReviews = (items: PublishItem[]) => {
+    void requestPublishReviews(items);
   };
 
   // Stage 2: Publish General Summary to MR Note Trigger
@@ -285,6 +681,24 @@ export default function App() {
       itemsToPublish: [],
     });
     setIsPublishModalOpen(true);
+  };
+
+  /** 發布成功：寫入本地發布紀錄並取消勾選 */
+  const markPublished = (
+    item: PublishItem,
+    commentText: string,
+    suggestionText: string,
+    discussionId: string | number
+  ) => {
+    setPublishedRecords((prev) => [
+      ...prev,
+      createPublishedRecord(item.review, commentText, suggestionText, discussionId),
+    ]);
+    setSelectedIndices((prev) => {
+      const next = new Set(prev);
+      next.delete(item.index);
+      return next;
+    });
   };
 
   // Stage 2: Confirm and Execute Publishing (Discussions API or Notes API)
@@ -369,7 +783,8 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         setIsSummaryPublished(true);
       } else {
         // Publish Review Items via Discussions API
-        const diffRefs = currentGitLabMr?.diff_refs;
+        // 使用產生目前結果時的 diff_refs，行號才會對到同一個版本
+        const diffRefs = resultDiffRefs ?? currentGitLabMr?.diff_refs;
 
         for (const item of publishModalConfig.itemsToPublish) {
           // Update status to sending
@@ -402,6 +817,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                   discussionId: res.id,
                 },
               }));
+              markPublished(item, commentText, suggestionText, res.id);
             } else {
               const discussionBody = `**[${item.review.severity.toUpperCase()}] ${item.review.category.toUpperCase()}**: ${commentText}\n\n> 💡 **修改建議**：\n> ${suggestionText}\n\n*— 來自 GitLab MR 審查工具*`;
 
@@ -459,6 +875,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                   discussionId: res.id,
                 },
               }));
+              markPublished(item, commentText, suggestionText, res.id);
             }
           } catch (itemErr: unknown) {
             const errDetail = itemErr instanceof Error ? itemErr.message : String(itemErr);
@@ -536,10 +953,19 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
       <Header
         onOpenSettings={() => setIsSettingsOpen(true)}
         hasApiKey={!!settings.geminiApiKey}
+        onOpenHistory={historyAvailable ? () => setIsHistoryOpen(true) : undefined}
+        historyCount={historyAvailable ? historyRecords.length : undefined}
       />
 
       {/* 2. Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+        {historyAvailable === false && (
+          <p className="mb-3 text-xs text-muted flex items-center gap-1.5">
+            <DatabaseZap className="w-3.5 h-3.5 text-muted-light" />
+            此瀏覽器無法保存歷史紀錄
+          </p>
+        )}
+
         {/* Info / Notice notification banner if any */}
         {infoMessage && (
           <div className="mb-4 p-4 bg-sky-50 border border-sky-200 rounded-xl text-sky-900 text-xs flex items-start justify-between gap-3 shadow-xs animate-in fade-in duration-150">
@@ -652,8 +1078,9 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
               </div>
             ) : analysisResult ? (
               <AnalysisResultView
+                key={`${currentRecordId ?? 'unsaved'}-${analyzedAt ?? 0}`}
                 result={analysisResult}
-                diffFiles={parsedDiff.files}
+                diffFiles={resultDiffFiles}
                 onOpenFileDiff={handleOpenFileDiff}
                 // Stage 2 GitLab props
                 onPublishSingleReview={handlePublishSingleReview}
@@ -666,6 +1093,16 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                 isSummaryPublished={isSummaryPublished}
                 isSharedToMrPublished={isSharedToMrPublished}
                 mrUrl={currentGitLabMr?.web_url || gitlabMrUrl}
+                selectedIndices={selectedIndices}
+                onSelectedIndicesChange={setSelectedIndices}
+                draftEdits={draftEdits}
+                onDraftEditsChange={setDraftEdits}
+                publishedMatches={publishedMatches}
+                analyzedAtLabel={
+                  historyAvailable && analyzedAt ? formatHistoryTime(analyzedAt) : undefined
+                }
+                hasNewCommit={historyAvailable === true && !!currentRecord && hasNewCommit(currentRecord)}
+                onReanalyze={handleReanalyze}
               />
             ) : (
               <div className="bg-surface rounded-xl border border-surface-border p-12 text-center shadow-xs space-y-4">
@@ -715,6 +1152,34 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         summaryTitle={analysisResult?.title}
         isPublishing={isPublishingInProgress}
       />
+
+      {/* 6. 重複發布警告（橘色），按「仍要發布」才進入原本的發布確認 */}
+      <ConfirmDialog
+        open={!!duplicateWarning}
+        title={`有 ${duplicateWarning?.count ?? 0} 則已發布過（依本地紀錄與 MR 現有留言比對），確定要重複發布？`}
+        body="重複發布會在 MR 上出現相同的留言。"
+        confirmLabel="仍要發布"
+        onCancel={() => setDuplicateWarning(null)}
+        onConfirm={() => {
+          const items = duplicateWarning?.items ?? [];
+          setDuplicateWarning(null);
+          openPublishModal(items);
+        }}
+      />
+
+      {/* 7. 歷史紀錄抽屜（IndexedDB 不可用時不顯示） */}
+      {historyAvailable && (
+        <HistoryDrawer
+          open={isHistoryOpen}
+          records={historyRecords}
+          activeId={currentRecordId}
+          onClose={() => setIsHistoryOpen(false)}
+          onOpen={(id) => void handleOpenRecord(id)}
+          onTogglePin={(id) => void handleTogglePin(id)}
+          onDelete={(id) => void handleDeleteRecord(id)}
+          onClearUnpinned={() => void handleClearUnpinned()}
+        />
+      )}
     </div>
   );
 }

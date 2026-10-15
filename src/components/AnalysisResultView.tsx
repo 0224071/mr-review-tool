@@ -15,6 +15,8 @@ import {
   Send,
   Users,
   ExternalLink,
+  GitCommitHorizontal,
+  RefreshCw,
 } from 'lucide-react';
 import { DiffFile } from '../types/diff';
 import { MRAnalysisResult, MRReviewItem } from '../types/review';
@@ -25,6 +27,8 @@ import { MROverviewCard } from './MROverviewCard';
 import { ReviewCommentsList } from './ReviewCommentsList';
 import { StructuralGraphView } from './StructuralGraphView';
 import { ChecklistCoverageBanner } from './ChecklistCoverageBanner';
+import { DraftEdits } from '../core/history-store';
+import { PublishedMatch } from '../core/publish-dedup';
 
 interface AnalysisResultViewProps {
   result: MRAnalysisResult;
@@ -54,6 +58,18 @@ interface AnalysisResultViewProps {
   isSummaryPublished?: boolean;
   isSharedToMrPublished?: boolean;
   mrUrl?: string;
+
+  // 勾選與編輯狀態由 App 管理（存入歷史紀錄）
+  selectedIndices: Set<number>;
+  onSelectedIndicesChange: (next: Set<number>) => void;
+  draftEdits: DraftEdits;
+  onDraftEditsChange: (next: DraftEdits) => void;
+
+  // 快取與歷史紀錄
+  publishedMatches?: Record<number, PublishedMatch>;
+  analyzedAtLabel?: string;
+  hasNewCommit?: boolean;
+  onReanalyze?: () => void;
 }
 
 export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
@@ -70,23 +86,17 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   isSummaryPublished = false,
   isSharedToMrPublished = false,
   mrUrl = '',
+  selectedIndices,
+  onSelectedIndicesChange: setSelectedIndices,
+  draftEdits,
+  onDraftEditsChange: setDraftEdits,
+  publishedMatches = {},
+  analyzedAtLabel,
+  hasNewCommit = false,
+  onReanalyze,
 }) => {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'review' | 'graph' | 'files'>('review');
-
-  // Unified selections & draft edits
-  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(() => {
-    const initial = new Set<number>();
-    result.reviews.forEach((r, idx) => {
-      if (r.lineVerified !== false) {
-        initial.add(idx);
-      }
-    });
-    return initial;
-  });
-  const [draftEdits, setDraftEdits] = useState<
-    Record<number, { comment: string; suggestion: string }>
-  >({});
 
   // File tab collapse state: default all collapsed
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
@@ -245,6 +255,29 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
 
   return (
     <div className="space-y-4 pb-6">
+      {/* 新 commit 提示列：快取結果的 head SHA 與 MR 目前不同 */}
+      {hasNewCommit && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-warning-border bg-warning-subtle text-xs text-warning-text"
+        >
+          <span className="flex items-center gap-2">
+            <GitCommitHorizontal className="w-4 h-4 text-warning shrink-0" />
+            此 MR 在分析後有新的 commit，目前顯示的是舊結果
+          </span>
+          {onReanalyze && (
+            <button
+              type="button"
+              onClick={onReanalyze}
+              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-warning-border bg-surface font-semibold text-warning-text hover:bg-warning-hover"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              重新分析
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 1. Checklist Coverage Banner at the very top (debug mode only) */}
       {isDebugMode && (
         <ChecklistCoverageBanner
@@ -258,6 +291,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
       <MROverviewCard
         result={result}
         hasGitLabMr={hasGitLabMr}
+        analyzedAtLabel={analyzedAtLabel}
       />
 
       {/* 3. Navigation Tabs and Unified Export & Publish Dropdowns */}
@@ -445,6 +479,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
             diffFiles={diffFiles}
             onPublishSingle={onPublishSingleReview}
             publishStates={publishStates}
+            publishedMatches={publishedMatches}
             isGitLabConfigured={isGitLabConfigured}
             selectedIndices={selectedIndices}
             onSelectIndicesChange={setSelectedIndices}

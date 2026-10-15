@@ -55,6 +55,13 @@ export interface GitLabNote {
   };
   created_at: string;
   system: boolean;
+  /** 行內 discussion 的位置（一般留言沒有） */
+  position?: {
+    new_path?: string | null;
+    old_path?: string | null;
+    new_line?: number | null;
+    old_line?: number | null;
+  } | null;
 }
 
 export interface ParsedGitLabUrl {

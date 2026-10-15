@@ -34,6 +34,8 @@ import {
 } from '../types/review';
 import { ReviewPublishState } from '../types/gitlab';
 import { DiffFile } from '../types/diff';
+import { PublishedMatch } from '../core/publish-dedup';
+import { formatHistoryTime } from '../core/history-store';
 
 interface ReviewCommentsListProps {
   reviews: MRReviewItem[];
@@ -49,6 +51,8 @@ interface ReviewCommentsListProps {
     index?: number
   ) => void;
   publishStates?: Record<number, ReviewPublishState>;
+  /** 依本地紀錄與 MR 現有留言判斷的已發布意見 */
+  publishedMatches?: Record<number, PublishedMatch>;
   isGitLabConfigured?: boolean;
   selectedIndices?: Set<number>;
   onSelectIndicesChange?: (next: Set<number>) => void;
@@ -101,6 +105,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
   diffFiles = [],
   onPublishSingle,
   publishStates = {},
+  publishedMatches = {},
   selectedIndices: controlledSelectedIndices,
   onSelectIndicesChange,
   draftEdits: controlledDraftEdits,
@@ -387,7 +392,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
             const isDraftModified = !!draftEdits[originalIndex];
 
             const pubState = publishStates[originalIndex];
-            const isPublished = pubState?.status === 'published';
+            const publishedMatch = publishedMatches[originalIndex];
+            const isPublished = pubState?.status === 'published' || !!publishedMatch;
             const isSending = pubState?.status === 'sending';
             const isError = pubState?.status === 'error';
 
@@ -406,9 +412,10 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     <button
                       type="button"
                       onClick={() => handleToggleSelect(originalIndex)}
-                      disabled={isPublished || isSending}
+                      disabled={isSending}
                       className="text-slate-400 hover:text-primary disabled:opacity-40 transition-colors mt-0.5 shrink-0 cursor-pointer"
-                      title={isPublished ? '已發布至 GitLab' : '勾選此意見'}
+                      title={isPublished ? '已發布過，勾選將重複發布' : '勾選此意見'}
+                      aria-pressed={isSelected}
                     >
                       {isSelected ? (
                         <CheckSquare className="w-4 h-4 text-primary" />
@@ -424,6 +431,20 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                       <span className={`w-1.5 h-1.5 rounded-full ${sevMeta.dot}`} />
                       {sevMeta.label}
                     </span>
+
+                    {isPublished && (
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold text-[10px] border shrink-0 mt-0.5 text-success-text bg-success-subtle border-success-border"
+                        title={
+                          publishedMatch?.source === 'remote'
+                            ? 'MR 上已有相同內容的留言'
+                            : '已發布至 GitLab'
+                        }
+                      >
+                        <CheckCircle2 className="w-3 h-3 text-success" />
+                        已發布
+                      </span>
+                    )}
 
                     {/* File and Line: Toggles inline code diff */}
                     <button
@@ -527,9 +548,9 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                             originalIndex
                           )
                         }
-                        disabled={isPublished || isSending}
-                        className="p-1 rounded text-gitlab hover:text-gitlab-hover hover:bg-orange-50 transition-colors disabled:opacity-40"
-                        title={isPublished ? '已發布' : '發布此則至 GitLab'}
+                        disabled={isSending}
+                        className="p-1 rounded text-gitlab hover:text-gitlab-hover hover:bg-gitlab-subtle transition-colors disabled:opacity-40"
+                        title={isPublished ? '已發布過，再次發布會重複' : '發布此則至 GitLab'}
                         aria-label="發布單則"
                       >
                         <Send className="w-3.5 h-3.5" />
@@ -719,10 +740,9 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     </span>
                   )}
 
-                  {isPublished && (
-                    <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                      已發布至 GitLab
+                  {isPublished && publishedMatch && publishedMatch.publishedAt > 0 && (
+                    <span className="text-muted">
+                      發布於 {formatHistoryTime(publishedMatch.publishedAt)}
                     </span>
                   )}
 
