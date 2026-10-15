@@ -11,7 +11,13 @@ import { SAMPLE_ANALYSIS_RESULT } from '../services/diff-sources/sample-analysis
 import { SAMPLE_GIT_DIFF } from '../services/diff-sources/sample-diffs';
 import { EMPTY_COMMENT_MESSAGE } from '../core/review-text';
 import type { PublishBatchFn } from '../app/app-services';
-import { DEMO_BANNER_TEXT, DEMO_NOTICE } from './demo-mode';
+import {
+  DEMO_BANNER_SHORT_TEXT,
+  DEMO_BANNER_TEXT,
+  DEMO_HOME_HINT,
+  DEMO_NOTICE,
+  DEMO_PUBLISH_CONFIRM_TITLE,
+} from './demo-mode';
 
 /** 攔下示範 GitLab 交給假發布器的每一批，確認實際收到哪些意見（行為不變） */
 const fakePublishBatchSpy = vi.hoisted(() => vi.fn());
@@ -378,11 +384,49 @@ describe('預設勾選：正式與示範模式初始都不勾', () => {
   });
 });
 
+describe('示範模式文案（#45）', () => {
+  it('橫幅：桌機完整文案、手機短文案各一行', async () => {
+    await mount('/?demo=1');
+    expect(DEMO_BANNER_TEXT).toBe('示範模式：分析和發布都是模擬的，不會連到 AI 或 GitLab');
+    const banner = container.querySelector('[data-testid="demo-banner"]')!;
+    const full = Array.from(banner.querySelectorAll('span')).find((s) => s.textContent === DEMO_BANNER_TEXT)!;
+    const short = Array.from(banner.querySelectorAll('span')).find((s) => s.textContent === DEMO_BANNER_SHORT_TEXT)!;
+    expect(full.className).toContain('hidden sm:inline');
+    expect(short.className).toContain('sm:hidden');
+    expect(short.className).toContain('truncate');
+    expect(DEMO_BANNER_SHORT_TEXT.length).toBeLessThan(DEMO_BANNER_TEXT.length);
+  });
+
+  it('空白狀態：說明「已載入…按「分析」看範例結果」，不提 diff 在哪一側，也沒有「用範例試試看」按鈕', async () => {
+    await mount('/?demo=1');
+    const main = container.querySelector('main')!;
+    expect(main.textContent).toContain(DEMO_HOME_HINT);
+    expect(DEMO_HOME_HINT).toMatch(/^已載入/);
+    expect(DEMO_HOME_HINT).toContain('按「分析」看範例結果');
+    expect(main.textContent).not.toMatch(/左側|右側|左欄|右欄/);
+    expect(main.textContent).not.toContain('用範例試試看');
+  });
+
+  it('確認視窗標題為「模擬發布（示範，不會送到 GitLab）」', async () => {
+    await mount('/?demo=1');
+    await click(findButton('分析'));
+    await waitFor(() => text().includes(SAMPLE_ANALYSIS_RESULT.title), '分析結果');
+    await click(container.querySelector<HTMLButtonElement>('button[aria-pressed]')!);
+    await click(findButton('發布已選 1 則'));
+    await waitFor(() => !!document.querySelector('[role="dialog"]'), '確認視窗');
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.getAttribute('aria-label')).toBe('模擬發布（示範，不會送到 GitLab）');
+    expect(dialog.querySelector('h2')!.textContent).toBe(DEMO_PUBLISH_CONFIRM_TITLE);
+  });
+});
+
 describe('進入示範', () => {
   it('空白首頁主要區域有「用範例試試看」，按下後進入示範並在網址加上 ?demo=1', async () => {
     await mount('/');
     expect(text()).not.toContain(DEMO_BANNER_TEXT);
     const main = container.querySelector('main')!;
+    // 正式模式的空白首頁仍是原本的說明與按鈕
+    expect(main.textContent).not.toContain(DEMO_HOME_HINT);
     await click(findButton('用範例試試看', main));
     expect(window.location.search).toContain('demo=1');
     expect(text()).toContain(DEMO_BANNER_TEXT);

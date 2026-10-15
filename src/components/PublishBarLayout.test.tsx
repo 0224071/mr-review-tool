@@ -5,7 +5,7 @@
  */
 import { act } from 'react';
 import { createRoot, Root as ReactRoot } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnalysisResultView } from './AnalysisResultView';
 import { MROverviewCard } from './MROverviewCard';
 import { EMPTY_COMMENT_MESSAGE } from '../core/review-text';
@@ -69,18 +69,39 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
 });
 
+/** 模擬瀏覽器量到的發布列高度與 sticky 的 bottom（happy-dom 不套 CSS，兩者都量不到） */
+const stubBarMetrics = (offsetHeight: number, bottom: string) => {
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(offsetHeight);
+  const original = window.getComputedStyle.bind(window);
+  vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+    const style = original(el, pseudo);
+    if (el instanceof HTMLElement && el.getAttribute('aria-label') === '發布列') {
+      return new Proxy(style, { get: (target, key) => (key === 'bottom' ? bottom : Reflect.get(target, key)) });
+    }
+    return style;
+  });
+};
+
 describe('浮動發布列留出的空間（#41）', () => {
-  it('連結 MR 顯示發布列時設定 --publish-bar-space（含 bottom-4 的 16px），卸載後移除', async () => {
+  it('連結 MR 顯示發布列時設定 --publish-bar-space = 高度 + getComputedStyle(bar).bottom，卸載後移除', async () => {
+    stubBarMetrics(60, '24px');
     await render('https://gitlab.example.com/g/p/-/merge_requests/1');
     expect(container.textContent).toContain('發布已選 0 則');
-    expect(barSpace()).toMatch(/^\d+px$/);
-    expect(parseInt(barSpace(), 10)).toBeGreaterThanOrEqual(16);
+    // 用實際的 bottom（24px），不是寫死的 16px
+    expect(barSpace()).toBe('84px');
 
     act(() => root.unmount());
     expect(barSpace()).toBe('');
     root = createRoot(container);
+  });
+
+  it('bottom 讀不到數值（auto）時只算發布列高度', async () => {
+    stubBarMetrics(60, 'auto');
+    await render('https://gitlab.example.com/g/p/-/merge_requests/1');
+    expect(barSpace()).toBe('60px');
   });
 
   it('沒有發布列（未連結 MR）時不留空間', async () => {
@@ -104,7 +125,9 @@ describe('意見卡片版面（#41 hover 按鈕、#43 內文欄寬）', () => {
     const cards = Array.from(container.querySelectorAll<HTMLElement>('div[tabindex="0"]'));
     expect(cards).toHaveLength(2);
 
-    const headerRow = (card: HTMLElement) => card.querySelector('button[aria-label="發布單則"]')!.parentElement!.parentElement!;
+    // 卡片第一列：勾選框、檔名與操作按鈕
+    const headerRow = (card: HTMLElement) => card.firstElementChild!;
+    expect(headerRow(cards[0]).contains(cards[0].querySelector('button[aria-label="發布單則"]'))).toBe(true);
 
     const body = Array.from(cards[0].querySelectorAll('p')).find((p) => p.textContent === '折扣金額未檢查負數')!;
     expect(body).toBeTruthy();

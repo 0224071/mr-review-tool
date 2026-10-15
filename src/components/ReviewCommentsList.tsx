@@ -44,6 +44,10 @@ import {
   resolveEffectiveComment,
   resolveEffectiveSuggestion,
 } from '../core/review-text';
+import { DisabledReasonText, TapForReason, useDisabledReason } from './DisabledReason';
+
+/** 手機點到停用的勾選、複製、發布按鈕時顯示的原因 */
+export const EMPTY_COMMENT_REASON = '內文是空的，所以不能勾選、複製或發布；請先按「編輯草稿」補上內文';
 
 interface ReviewCommentsListProps {
   reviews: MRReviewItem[];
@@ -257,6 +261,9 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
     });
   }, [indexedReviews, selectedGroupId, selectedCategory, selectedSeverity]);
 
+  // 手機點到停用的按鈕時，在該則卡片顯示原因
+  const [disabledHint, showDisabledHint] = useDisabledReason<number>();
+
   /** 內文（草稿優先）是空的，不能勾選、複製或發布 */
   const isCommentEmpty = (index: number) =>
     !hasCommentText(resolveEffectiveComment(draftEdits[index]?.comment, reviews[index]?.comment));
@@ -330,7 +337,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
     <div className="bg-surface rounded-xl border border-surface-border overflow-hidden shadow-xs space-y-0">
       {/* 1. Filter Bar: Dropdowns only */}
       <div className="p-3 bg-surface-subtle border-b border-surface-border flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           {/* Select all checkbox button */}
           <button
             type="button"
@@ -345,6 +352,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
             )}
             <span>全選</span>
           </button>
+          <span className="text-muted-light">勾選要發布的意見</span>
 
           <span className="font-semibold text-slate-800">
             審查意見 ({filteredAndSortedReviews.length} / {reviews.length} 則)
@@ -404,6 +412,10 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
             };
             const isDraftModified = !!draftEdits[originalIndex];
             const commentEmpty = isCommentEmpty(originalIndex);
+            // 內文空了（且不在編輯中）時卡片淡化，只留提示醒目
+            const dimmed = commentEmpty && !isEditing;
+            const emptyReason = commentEmpty ? EMPTY_COMMENT_REASON : null;
+            const showReason = (message: string) => showDisabledHint(originalIndex, message);
 
             const pubState = publishStates[originalIndex];
             const publishedMatch = publishedMatches[originalIndex];
@@ -421,22 +433,25 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
               >
                 {/* Header Row: Checkbox, Severity, File:Line；右側為操作按鈕 */}
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex flex-wrap items-start gap-2 flex-1 min-w-0">
+                  <div className={`flex flex-wrap items-start gap-2 flex-1 min-w-0 transition-opacity ${dimmed ? 'opacity-50' : ''}`}>
                     {/* Item Checkbox */}
-                    <button
-                      type="button"
-                      onClick={() => handleToggleSelect(originalIndex)}
-                      disabled={isSending || commentEmpty}
-                      className="text-slate-400 hover:text-primary disabled:opacity-40 transition-colors mt-0.5 shrink-0 cursor-pointer"
-                      title={commentEmpty ? EMPTY_COMMENT_MESSAGE : isPublished ? '已發布過，勾選將重複發布' : '勾選此意見'}
-                      aria-pressed={isSelected}
-                    >
-                      {isSelected ? (
-                        <CheckSquare className="w-4 h-4 text-primary" />
-                      ) : (
-                        <Square className="w-4 h-4" />
-                      )}
-                    </button>
+                    <TapForReason reason={emptyReason} onReason={showReason} className="mt-0.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSelect(originalIndex)}
+                        disabled={isSending || commentEmpty}
+                        className="text-slate-400 hover:text-primary disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
+                        title={commentEmpty ? EMPTY_COMMENT_MESSAGE : isPublished ? '已發布過，勾選將重複發布' : '勾選此意見'}
+                        aria-label={`勾選此意見：${review.file}${review.line !== null ? `:L${review.line}` : ''}`}
+                        aria-pressed={isSelected}
+                      >
+                        {isSelected ? (
+                          <CheckSquare className="w-4 h-4 text-primary" />
+                        ) : (
+                          <Square className="w-4 h-4" />
+                        )}
+                      </button>
+                    </TapForReason>
 
                     {/* Severity Badge */}
                     <span
@@ -539,48 +554,52 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     )}
 
                     {/* Copy Button */}
-                    <button
-                      type="button"
-                      onClick={() => handleCopyReview(review, originalIndex)}
-                      disabled={commentEmpty}
-                      className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors disabled:opacity-40"
-                      title={commentEmpty ? EMPTY_COMMENT_MESSAGE : '複製意見'}
-                      aria-label="複製意見"
-                    >
-                      {copiedIndex === originalIndex ? (
-                        <Check className="w-3.5 h-3.5 text-emerald-600" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5" />
-                      )}
-                    </button>
+                    <TapForReason reason={emptyReason} onReason={showReason}>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyReview(review, originalIndex)}
+                        disabled={commentEmpty}
+                        className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                        title={commentEmpty ? EMPTY_COMMENT_MESSAGE : '複製意見'}
+                        aria-label="複製意見"
+                      >
+                        {copiedIndex === originalIndex ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </TapForReason>
 
                     {/* Single Publish Button */}
                     {onPublishSingle && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          runUnlessPublishing(isSending || isPublishing, () =>
-                            onPublishSingle(
-                              review,
-                              draftEdits[originalIndex]?.comment,
-                              draftEdits[originalIndex]?.suggestion,
-                              originalIndex
+                      <TapForReason reason={emptyReason} onReason={showReason}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            runUnlessPublishing(isSending || isPublishing, () =>
+                              onPublishSingle(
+                                review,
+                                draftEdits[originalIndex]?.comment,
+                                draftEdits[originalIndex]?.suggestion,
+                                originalIndex
+                              )
                             )
-                          )
-                        }
-                        disabled={isSending || isPublishing || commentEmpty}
-                        className="p-1 rounded text-gitlab hover:text-gitlab-hover hover:bg-gitlab-subtle transition-colors disabled:opacity-40"
-                        title={isPublished ? '已發布過，再次發布會重複' : '發布此則至 GitLab'}
-                        aria-label="發布單則"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                      </button>
+                          }
+                          disabled={isSending || isPublishing || commentEmpty}
+                          className="p-1 rounded text-gitlab hover:text-gitlab-hover hover:bg-gitlab-subtle transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                          title={isPublished ? '已發布過，再次發布會重複' : '發布此則至 GitLab'}
+                          aria-label="發布單則"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                        </button>
+                      </TapForReason>
                     )}
                   </div>
                 </div>
 
                 {/* Comment text：獨立一行佔滿卡片寬度，不和檔名、操作按鈕搶寬度；內文空了時改顯示提示 */}
-                {((!isEditing && currentDraft.comment) || commentEmpty) && (
+                {((!isEditing && currentDraft.comment) || commentEmpty || disabledHint?.key === originalIndex) && (
                   <div className="sm:pl-6 space-y-1.5">
                     {!isEditing && currentDraft.comment && (
                       <p className="text-slate-800 font-medium leading-relaxed break-words">
@@ -596,6 +615,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                         {EMPTY_COMMENT_MESSAGE}
                       </span>
                     )}
+                    {disabledHint?.key === originalIndex && <DisabledReasonText message={disabledHint.message} />}
                   </div>
                 )}
 
@@ -607,6 +627,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                         意見評論內文 (Comment)：
                       </label>
                       <textarea
+                        aria-label="編輯審查意見內文"
                         value={currentDraft.comment}
                         onChange={(e) => {
                           setDraftEdits((prev) => ({

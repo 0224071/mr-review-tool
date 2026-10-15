@@ -55,6 +55,8 @@ export type PublishBatchFn = (
 export interface GitLabGateway {
   /** 發布確認與結果上的額外標註；正式版為 undefined */
   notice?: string;
+  /** 發布確認視窗的標題；未提供時用預設標題（正式版為 undefined） */
+  publishConfirmTitle?: string;
   /** 沒有 MR 網址時仍可發布的目標名稱；正式版為 undefined（必須有 MR 網址） */
   targetLabel?: string;
   /** 結果與 MR 都沒有 diff_refs 時使用的版本資訊（示範模式為範例的假版本）；正式版為 undefined */
@@ -82,8 +84,8 @@ export interface AppServices {
   homeHint: string;
   /** 主要區域最上方的固定橫幅（正式版為 null） */
   banner: React.ReactNode;
-  /** 「用範例試試看」：進入（或重新開始）示範 */
-  onTryDemo: () => void;
+  /** 「用範例試試看」：進入示範；未提供時（已在示範中）不顯示這個按鈕 */
+  onTryDemo?: () => void;
 }
 
 /** 有標註時接在訊息後面：「已發布 3 則。（示範，未實際發布）」 */

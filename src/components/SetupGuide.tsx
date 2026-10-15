@@ -4,7 +4,8 @@ import { FlaskConical, Key, X } from 'lucide-react';
 interface SetupGuideProps {
   /** 目前缺少的設定，例如「尚未設定 Google Gemini API Key」 */
   notice: string | null;
-  onTryDemo: () => void;
+  /** 未提供時不顯示「用範例試試看」 */
+  onTryDemo?: () => void;
   onOpenSettings: () => void;
   onClose: () => void;
 }
@@ -26,14 +27,16 @@ export const SetupGuide: React.FC<SetupGuideProps> = ({ notice, onTryDemo, onOpe
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={onTryDemo}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:bg-primary-hover text-white font-semibold"
-          >
-            <FlaskConical className="w-3.5 h-3.5" />
-            用範例試試看
-          </button>
+          {onTryDemo && (
+            <button
+              type="button"
+              onClick={onTryDemo}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:bg-primary-hover text-white font-semibold"
+            >
+              <FlaskConical className="w-3.5 h-3.5" />
+              用範例試試看
+            </button>
+          )}
           <button
             type="button"
             onClick={onOpenSettings}

@@ -11,7 +11,7 @@ import {
 import { GitLabDiffRefs, GitLabMergeRequestInfo } from '../types/gitlab';
 import { MRReviewItem } from '../types/review';
 import { plannedPublishMode } from '../services/review-publisher';
-import { hasSuggestion, resolveEffectiveSuggestion } from '../core/review-text';
+import { hasSuggestion, resolveEffectiveComment, resolveEffectiveSuggestion } from '../core/review-text';
 
 interface PublishConfirmationModalProps {
   isOpen: boolean;
@@ -28,6 +28,8 @@ interface PublishConfirmationModalProps {
   diffRefs?: GitLabDiffRefs;
   isPublishingSummary?: boolean;
   summaryTitle?: string;
+  /** 視窗標題；未提供時依發布內容顯示預設標題（示範模式：「模擬發布（示範，不會送到 GitLab）」） */
+  title?: string;
   /** 沒有 MR 資訊時顯示的目標名稱（示範模式） */
   targetLabel?: string;
   /** 標註於標題、內容與按鈕（示範模式：「示範，未實際發布」） */
@@ -55,6 +57,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
   diffRefs,
   isPublishingSummary = false,
   summaryTitle,
+  title,
   targetLabel,
   notice,
   isPublishing,
@@ -63,13 +66,14 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
 
   const generalCount = itemsToPublish.filter((i) => plannedPublishMode(i.review, diffRefs) === 'general').length;
   const unverifiedCount = itemsToPublish.filter((i) => i.review.lineVerified === false).length;
+  const heading = title ?? (isPublishingSummary ? '確認發布整體摘要留言' : '確認發布審查意見至 GitLab');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50 backdrop-blur-xs p-4 animate-in fade-in duration-150">
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={isPublishingSummary ? '確認發布整體摘要留言' : '確認發布審查意見至 GitLab'}
+        aria-label={heading}
         className="bg-surface rounded-xl shadow-2xl max-w-lg w-full overflow-hidden border border-surface-border"
       >
         {/* Header */}
@@ -80,7 +84,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
             </div>
             <div>
               <h2 className="text-base font-semibold text-ink">
-                {isPublishingSummary ? '確認發布整體摘要留言' : '確認發布審查意見至 GitLab'}
+                {heading}
               </h2>
               <p className="text-xs text-muted">
                 {notice ? `模擬發布：${notice}` : '透過 GitLab Discussions API 直接發表至 MR'}
@@ -155,6 +159,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
               <ol className="divide-y divide-surface-border border border-surface-border rounded-lg overflow-hidden max-h-72 overflow-y-auto">
                 {itemsToPublish.map(({ review, customComment, customSuggestion }, idx) => {
                   const mode = plannedPublishMode(review, diffRefs);
+                  const comment = resolveEffectiveComment(customComment, review.comment);
                   const suggestion = resolveEffectiveSuggestion(customSuggestion, review.suggestion);
                   return (
                     <li key={idx} className="p-2.5 bg-surface space-y-1">
@@ -177,7 +182,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
                         <MessageSquare className="w-3 h-3" />
                         {describePublishMode(review, diffRefs)}
                       </div>
-                      <p className="text-ink whitespace-pre-wrap break-words">{customComment || review.comment}</p>
+                      <p className="text-ink whitespace-pre-wrap break-words">{comment}</p>
                       {hasSuggestion(suggestion) && (
                         <p className="text-muted whitespace-pre-wrap break-words font-mono text-[11px]">
                           建議：{suggestion}

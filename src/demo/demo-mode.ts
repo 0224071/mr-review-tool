@@ -4,7 +4,13 @@
 export const DEMO_QUERY_PARAM = 'demo';
 /** 示範模式下所有「發布」結果與確認視窗上的標註 */
 export const DEMO_NOTICE = '示範，未實際發布';
-export const DEMO_BANNER_TEXT = '這是示範結果，不會連到 AI 或 GitLab';
+export const DEMO_BANNER_TEXT = '示範模式：分析和發布都是模擬的，不會連到 AI 或 GitLab';
+/** 手機窄螢幕的橫幅短版，只留一行 */
+export const DEMO_BANNER_SHORT_TEXT = '示範模式：分析和發布都是模擬的';
+/** 示範模式空白首頁的說明（不提 diff 在哪一側：手機版輸入區在上方） */
+export const DEMO_HOME_HINT = '已載入購物車範例 diff，按「分析」看範例結果。';
+/** 示範模式發布確認視窗的標題 */
+export const DEMO_PUBLISH_CONFIRM_TITLE = '模擬發布（示範，不會送到 GitLab）';
 
 type HistoryLike = Pick<History, 'replaceState' | 'state'>;
 

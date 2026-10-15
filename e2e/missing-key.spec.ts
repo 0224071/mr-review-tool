@@ -31,5 +31,5 @@ test('引導的「填寫金鑰」開啟設定', async ({page}) => {
 test('引導的「用範例試試看」進入示範', async ({page}) => {
   await page.getByRole('alert', {name: '尚未設定金鑰'}).getByRole('button', {name: '用範例試試看'}).click();
   await expect(page).toHaveURL(/[?&]demo=1/);
-  await expect(page.getByText('這是示範結果，不會連到 AI 或 GitLab')).toBeVisible();
+  await expect(page.getByText('示範模式：分析和發布都是模擬的，不會連到 AI 或 GitLab')).toBeVisible();
 });

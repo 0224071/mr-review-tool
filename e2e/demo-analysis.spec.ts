@@ -8,7 +8,7 @@ const GROUPS = ['功能核心邏輯', 'API 服務層', 'UI 元件', '測試與�
 
 test.beforeEach(async ({page}) => {
   await page.goto('/?demo=1');
-  await expect(page.getByText('這是示範結果，不會連到 AI 或 GitLab')).toBeVisible();
+  await expect(page.getByText('示範模式：分析和發布都是模擬的，不會連到 AI 或 GitLab')).toBeVisible();
   // 示範模式左欄已預先載入範例 diff
   await expect(page.getByRole('textbox', {name: /diff 將呈現於此/})).toHaveValue(/^diff --git /);
   await page.getByRole('button', {name: '分析', exact: true}).click();
@@ -49,7 +49,7 @@ test('審查意見顯示檔案、行號與操作按鈕', async ({page}) => {
 });
 
 test('展開程式碼片段後開啟完整檔案的 Diff 彈窗並關閉', async ({page}) => {
-  await page.getByRole('button', {name: /src\/api\/couponApi\.ts\s*:L17/}).click();
+  await page.getByRole('button', {name: /^src\/api\/couponApi\.ts\s*:L17/}).click();
   await expect(page.getByText('問題行前後各 5 行變更')).toBeVisible();
   await page.getByRole('button', {name: '查看完整檔案'}).click();
 

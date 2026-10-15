@@ -1090,17 +1090,19 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                   </h3>
                   <p className="text-xs text-muted leading-relaxed">{services.homeHint}</p>
                 </div>
-                <div className="pt-2 space-y-1.5">
-                  <button
-                    type="button"
-                    onClick={services.onTryDemo}
-                    className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-5 py-2.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm font-semibold shadow-xs transition-colors"
-                  >
-                    <FlaskConical className="w-4 h-4" />
-                    用範例試試看
-                  </button>
-                  <p className="text-[11px] text-muted-light">不需要金鑰，不會連到 AI 或 GitLab</p>
-                </div>
+                {services.onTryDemo && (
+                  <div className="pt-2 space-y-1.5">
+                    <button
+                      type="button"
+                      onClick={services.onTryDemo}
+                      className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-5 py-2.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm font-semibold shadow-xs transition-colors"
+                    >
+                      <FlaskConical className="w-4 h-4" />
+                      用範例試試看
+                    </button>
+                    <p className="text-[11px] text-muted-light">不需要金鑰，不會連到 AI 或 GitLab</p>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1136,6 +1138,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         diffRefs={publishDiffRefs}
         isPublishingSummary={publishModalConfig.isPublishingSummary}
         summaryTitle={analysisResult?.title}
+        title={gitlab.publishConfirmTitle}
         targetLabel={gitlab.targetLabel}
         notice={gitlab.notice}
         isPublishing={isPublishingInProgress}
