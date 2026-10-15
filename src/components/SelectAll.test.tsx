@@ -7,6 +7,7 @@ import { act, useState, type ComponentProps } from 'react';
 import { createRoot, Root as ReactRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnalysisResultView } from './AnalysisResultView';
+import { ReviewCommentsList } from './ReviewCommentsList';
 import { MRAnalysisResult, MRReviewItem } from '../types/review';
 import { DraftEdits } from '../core/history-store';
 import { filterPublishableItems } from '../core/review-text';
@@ -148,5 +149,23 @@ describe('全選（#40）', () => {
     expect(filterPublishableItems(sent)).toHaveLength(3);
     expect(sent.map((item) => item.index).sort()).toEqual([0, 1, 3]);
     expect(sent.some((item) => item.review.lineVerified === false)).toBe(true);
+  });
+});
+
+describe('預設勾選', () => {
+  it('未受控（沒傳 selectedIndices）時初始全部不勾，行號已驗證的也不勾', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () =>
+      root.render(<ReviewCommentsList reviews={RESULT.reviews} groups={RESULT.groups} selectedGroupId={null} />)
+    );
+
+    expect(container.querySelectorAll('button[aria-pressed]')).toHaveLength(RESULT.reviews.length);
+    expect(checkboxFor('折扣金額未檢查負數').getAttribute('aria-pressed')).toBe('false');
+    expect(pressed()).toBe(0);
+
+    await click(findButton('全選'));
+    expect(pressed()).toBe(3);
   });
 });

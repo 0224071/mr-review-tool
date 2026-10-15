@@ -342,6 +342,42 @@ describe('示範模式完整流程（?demo=1）', () => {
   });
 });
 
+describe('預設勾選：正式與示範模式初始都不勾', () => {
+  const expectNoneChecked = () => {
+    const checkboxes = Array.from(container.querySelectorAll('button[aria-pressed]'));
+    expect(checkboxes).toHaveLength(SAMPLE_ANALYSIS_RESULT.reviews.length);
+    expect(checkboxes.filter((b) => b.getAttribute('aria-pressed') === 'true')).toEqual([]);
+  };
+
+  it('示範模式分析後全部不勾', async () => {
+    await mount('/?demo=1');
+    await click(findButton('分析'));
+    await waitFor(() => text().includes(SAMPLE_ANALYSIS_RESULT.title), '分析結果');
+    expectNoneChecked();
+  });
+
+  it('正式模式（Gemini 回傳同一份結果）分析後全部不勾', async () => {
+    storage.getItem.mockImplementation((key: string) =>
+      key === SETTINGS_STORAGE_KEY ? JSON.stringify({ geminiApiKey: 'test-key' }) : null
+    );
+    fetchSpy.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(SAMPLE_ANALYSIS_RESULT) }] } }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+    );
+    await mount('/');
+    await click(findButton('範例 Diff'));
+    await click(findButton('分析'));
+    await waitFor(() => text().includes(SAMPLE_ANALYSIS_RESULT.title), '分析結果');
+
+    expect(text()).not.toContain(DEMO_BANNER_TEXT);
+    expect(fetchSpy).toHaveBeenCalled();
+    expectNoneChecked();
+  });
+});
+
 describe('進入示範', () => {
   it('空白首頁主要區域有「用範例試試看」，按下後進入示範並在網址加上 ?demo=1', async () => {
     await mount('/');

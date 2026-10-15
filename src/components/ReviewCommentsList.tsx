@@ -189,16 +189,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
   };
 
   // Fallback internal states if not controlled
-  const [internalSelectedIndices, setInternalSelectedIndices] = useState<Set<number>>(() => {
-    // Default checked: all verified lines (lineVerified !== false)
-    const initial = new Set<number>();
-    reviews.forEach((r, idx) => {
-      if (r.lineVerified !== false) {
-        initial.add(idx);
-      }
-    });
-    return initial;
-  });
+  // 預設全部不勾，與 App 受控時的 defaultSelectedIndices 一致（#18）
+  const [internalSelectedIndices, setInternalSelectedIndices] = useState<Set<number>>(() => new Set());
   const selectedIndices = controlledSelectedIndices ?? internalSelectedIndices;
   const setSelectedIndices = (next: Set<number>) => {
     if (onSelectIndicesChange) {
