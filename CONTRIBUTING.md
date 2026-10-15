@@ -2,9 +2,22 @@
 
 ## 分支與 commit
 
-- 一律從最新的 `main` 開分支，不直接 push 到 `main`。
+- 一律從最新的 `main` 開分支，**不能直接 push 到 `main`**，所有改動都經由 PR 合併。
 - 分支命名：`feat/…`、`fix/…`、`chore/…` 等，簡短描述用途。
 - commit 訊息採 `類型: 說明（#issue）` 格式，例如 `fix: 修正行號驗證 (#4)`。
+- commit 的作者 email 使用 GitHub 提供的 noreply email（`<id>+<帳號>@users.noreply.github.com`），不要用個人或公司信箱。
+- commit 訊息不要加 `Co-authored-by` 等共同作者標記。
+
+## 分支同步
+
+分支落後 `main` 時，一律用 merge 同步：
+
+```bash
+git fetch origin
+git merge origin/main
+```
+
+- **不 rebase**、**不 force push**（包含 `--force-with-lease`），避免改寫已推上去的歷史、讓審查中的留言對不上。
 
 ## PR 流程
 
@@ -32,13 +45,25 @@
 | **M** | S 的全部，加上設計與邊界情況、對相關模組的影響，必要時在本機或預覽環境實測 |
 | **L** | M 的全部，加上架構與拆分建議、完整實測；建議分兩階段審查（先看設計再看實作）或拆成較小的 PR |
 
-## 合併條件
+## Code Reviewer 結論
 
-以下全部滿足才能合併：
+- Code Reviewer 審完後，把結論寫成一則 **PR 留言**（例如「審查通過」或列出必修項目），留下紀錄。
+- 結論為可合併時，在 PR 加上 `reviewed` 標籤。
+- 審查結論以留言與標籤記錄，不使用 GitHub 的 approve 功能計數。
 
-- `ci` 與 `gitleaks` 檢查通過
-- 所有討論都已解決
-- Code Reviewer 已加上 `reviewed` 標籤
+## 合併條件（main 分支保護）
+
+`main` 受分支保護，以下全部滿足才能合併：
+
+- 必要檢查全部通過：`ci`、`gitleaks`、`e2e`
+- 所有對話（review conversations）都已 resolved
+- Code Reviewer 已留言記錄結論並加上 `reviewed` 標籤
+- **不需要** approval 數（不要求核准人數）
+
+補充：
+
+- 禁止直接 push 到 `main`，一律透過 PR 合併。
+- Vercel 預覽網址為公開，不需登入；不設定 bypass secret。
 
 ## 緊急修正
 
