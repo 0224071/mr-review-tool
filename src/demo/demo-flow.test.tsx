@@ -36,6 +36,27 @@ vi.mock('./fake-publisher', async (importOriginal) => {
   };
 });
 
+/**
+ * 「分析中」只在假 provider 等待期間出現；只靠 20ms 真實計時器時，負載高（整套平行跑）下
+ * click 的 act 收尾可能超過 20ms，結果先渲染完，「分析中」就已消失（#65）。
+ * 需要觀察中間狀態的測試設 analysisGate.hold，provider 會等它放行才開始回傳。
+ */
+const analysisGate = vi.hoisted(() => ({ hold: null as Promise<void> | null }));
+vi.mock('./fake-provider', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./fake-provider')>();
+  return {
+    ...actual,
+    createDemoProvider: (...args: Parameters<typeof actual.createDemoProvider>) => {
+      const provider = actual.createDemoProvider(...args);
+      const review: typeof provider.review = async (request) => {
+        if (analysisGate.hold) await analysisGate.hold;
+        return provider.review(request);
+      };
+      return { ...provider, review };
+    },
+  };
+});
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const DEMO_TIMING = { analysisDelayMs: 20, publishDelayMs: 0 };
@@ -87,6 +108,7 @@ const settingsKeyTouched = () =>
 
 beforeEach(() => {
   fakePublishBatchSpy.mockClear();
+  analysisGate.hold = null;
   fetchSpy = vi.fn(async () => {
     throw new Error('測試中不應發出網路請求');
   });
@@ -116,9 +138,13 @@ describe('示範模式完整流程（?demo=1）', () => {
     const textarea = container.querySelector('textarea')!;
     expect(textarea.value).toBe(SAMPLE_GIT_DIFF);
 
-    // 分析（假 provider 延遲後回傳範例結果）
+    // 分析（假 provider 延遲後回傳範例結果）；先擋住 provider，確定看得到「分析中」再放行
+    let release!: () => void;
+    analysisGate.hold = new Promise<void>((resolve) => (release = resolve));
     await click(findButton('分析'));
     expect(text()).toContain('分析中');
+    expect(text()).not.toContain(SAMPLE_ANALYSIS_RESULT.title);
+    release();
     await waitFor(() => text().includes(SAMPLE_ANALYSIS_RESULT.title), '分析結果');
     expect(text()).toContain(DEMO_BANNER_TEXT);
     expect(text()).toContain('示範 · 範例分析');
