@@ -126,6 +126,72 @@ describe('publishReviewItem', () => {
   });
 });
 
+describe('留言內文的修改建議段落', () => {
+  const SUGGESTION_HEADING = '💡 **修改建議**';
+
+  it('有建議：維持原格式', async () => {
+    const calls = mockGitLab({ discussion: () => json({ id: 'd' }) });
+    await publishReviewItem(TARGET, review(), '意見', '建議內容', REFS);
+    expect(calls[0].body?.body).toBe(
+      '**[HIGH] BUG**: 意見\n\n> 💡 **修改建議**：\n> 建議內容\n\n*— 來自 GitLab MR 審查工具*'
+    );
+  });
+
+  it.each([
+    ['undefined', undefined],
+    ['空字串', ''],
+    ['只有空白', '  \n\t '],
+  ])('建議為%s：行內留言不出現修改建議段落', async (_label, suggestion) => {
+    const calls = mockGitLab({ discussion: () => json({ id: 'd' }) });
+    await publishReviewItem(TARGET, review(), '意見', suggestion, REFS);
+    expect(calls[0].body?.position).toBeDefined();
+    expect(calls[0].body?.body).toBe('**[HIGH] BUG**: 意見\n\n*— 來自 GitLab MR 審查工具*');
+  });
+
+  it.each([
+    ['undefined', undefined],
+    ['空字串', ''],
+    ['只有空白', '   '],
+  ])('建議為%s：一般留言（無 diff_refs）不出現修改建議段落', async (_label, suggestion) => {
+    const calls = mockGitLab({ discussion: () => json({ id: 'd' }) });
+    await publishReviewItem(TARGET, review(), '意見', suggestion, undefined);
+    expect(calls[0].body?.position).toBeUndefined();
+    expect(calls[0].body?.body).not.toContain(SUGGESTION_HEADING);
+  });
+
+  it('建議為空：行號未驗證的一般留言不出現修改建議段落', async () => {
+    const calls = mockGitLab({ discussion: () => json({ id: 'd' }) });
+    await publishReviewItem(TARGET, review({ lineVerified: false }), '意見', ' ', REFS);
+    expect(calls[0].body?.body).toBe('src/cart.ts:10（行號未驗證）\n\n**[HIGH] BUG**: 意見\n\n*— 來自 GitLab MR 審查工具*');
+  });
+
+  it('建議為空：版本已更新改發的一般留言不出現修改建議段落', async () => {
+    const calls = mockGitLab({
+      discussion: (_b, nth) => (nth === 0 ? json({ message: 'bad position' }, 400) : json({ id: 'disc-fb' })),
+      mrHeadSha: 'newhead9999dddd',
+    });
+    const res = await publishReviewItem(TARGET, review(), '意見', '', REFS);
+    expect(res.mode).toBe('stale-fallback');
+    const posts = calls.filter((c) => c.method === 'POST');
+    expect(posts[1].body?.body).toBe('src/cart.ts:10（版本已更新）\n\n**[HIGH] BUG**: 意見\n\n*— 來自 GitLab MR 審查工具*');
+  });
+
+  it('批次發布：空建議與有建議混合時各自正確', async () => {
+    const calls = mockGitLab({ discussion: (_b, nth) => json({ id: `d-${nth}` }) });
+    await publishReviewBatch(
+      TARGET,
+      [
+        { index: 0, review: review(), comment: 'a', suggestion: '' },
+        { index: 1, review: review(), comment: 'b', suggestion: '有建議' },
+      ],
+      REFS
+    );
+    const posts = calls.filter((c) => c.method === 'POST');
+    expect(posts[0].body?.body).not.toContain(SUGGESTION_HEADING);
+    expect(posts[1].body?.body).toContain(`${SUGGESTION_HEADING}：\n> 有建議`);
+  });
+});
+
 describe('buildDiscussionPosition', () => {
   it('新增行只帶 new_line、刪除行只帶 old_line、未變更行兩者都帶', () => {
     expect(buildDiscussionPosition(review({ newLine: 5, oldLine: null }), REFS)).toMatchObject({ new_line: 5 });

@@ -9,6 +9,7 @@ import {
   fetchGitLabMergeRequest,
   GitLabApiError,
 } from './gitlab-api';
+import { hasSuggestion } from '../core/review-text';
 
 export interface PublishTarget {
   baseUrl: string;
@@ -29,8 +30,11 @@ export interface PublishReviewResult {
 /** 行內留言失敗時，這些 status 可能是 position 對不到目前版本造成的 */
 const POSITION_FAILURE_STATUSES = new Set([400, 500]);
 
-const reviewBody = (review: MRReviewItem, comment: string, suggestion: string) =>
-  `**[${review.severity.toUpperCase()}] ${review.category.toUpperCase()}**: ${comment}\n\n> 💡 **修改建議**：\n> ${suggestion}\n\n*— 來自 GitLab MR 審查工具*`;
+/** 建議為空（undefined、空字串、只有空白）時不輸出「修改建議」段落 */
+const reviewBody = (review: MRReviewItem, comment: string, suggestion: string | undefined) => {
+  const suggestionBlock = hasSuggestion(suggestion) ? `> 💡 **修改建議**：\n> ${suggestion}\n\n` : '';
+  return `**[${review.severity.toUpperCase()}] ${review.category.toUpperCase()}**: ${comment}\n\n${suggestionBlock}*— 來自 GitLab MR 審查工具*`;
+};
 
 const anchorLine = (review: MRReviewItem): number | null => review.newLine ?? review.oldLine ?? review.line ?? null;
 
@@ -38,7 +42,7 @@ const anchorLine = (review: MRReviewItem): number | null => review.newLine ?? re
 export function buildGeneralNoteBody(
   review: MRReviewItem,
   comment: string,
-  suggestion: string,
+  suggestion: string | undefined,
   note: '行號未驗證' | '版本已更新'
 ): string {
   const line = anchorLine(review);
@@ -92,7 +96,7 @@ export async function publishReviewItem(
   target: PublishTarget,
   review: MRReviewItem,
   comment: string,
-  suggestion: string,
+  suggestion: string | undefined,
   diffRefs: GitLabDiffRefs | undefined
 ): Promise<PublishReviewResult> {
   const { baseUrl, token, projectPath, mrIid } = target;
