@@ -30,6 +30,11 @@ export function createGeminiProvider(config: ProviderSettings): LlmProvider {
         .filter(Boolean);
     },
 
+    async testConnection() {
+      // models list 需帶 key，壞 key 回 400 API_KEY_INVALID（歸類為 auth）
+      return { models: (await this.listModels()).map((id) => ({ id })), keyVerified: true };
+    },
+
     review(request) {
       const url = `${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(
         apiKey

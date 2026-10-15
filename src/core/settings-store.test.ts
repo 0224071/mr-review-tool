@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clearProviderKey,
   getProviderSettings,
+  getProviderSetupNotice,
   isProviderReady,
   loadSettings,
   saveSettings,
@@ -73,5 +74,36 @@ describe('settings-store（localStorage 讀寫清除）', () => {
     expect(isProviderReady(s)).toBe(true);
     expect(isProviderReady(setProviderSettings(s, 'custom', { baseUrl: ' ' }))).toBe(false);
     expect(isProviderReady({ ...DEFAULT_SETTINGS, llmProvider: 'openai' })).toBe(false);
+  });
+});
+
+describe('getProviderSetupNotice（分析按鈕下方的設定提示依目前 provider 顯示）', () => {
+  it('預設 Gemini 未填 key', () => {
+    expect(getProviderSetupNotice(DEFAULT_SETTINGS)).toBe('尚未設定 Google Gemini API Key');
+  });
+
+  it('選 OpenRouter 時顯示 OpenRouter，不再提 Gemini；即使 Gemini 已有 key', () => {
+    const s = { ...DEFAULT_SETTINGS, llmProvider: 'openrouter' as const, geminiApiKey: 'gemini-key' };
+    expect(getProviderSetupNotice(s)).toBe('尚未設定 OpenRouter API Key');
+    expect(getProviderSetupNotice(setProviderSettings(s, 'openrouter', { apiKey: 'or-key' }))).toBeNull();
+  });
+
+  it('OpenAI／Anthropic 各自顯示自己的名稱', () => {
+    expect(getProviderSetupNotice({ ...DEFAULT_SETTINGS, llmProvider: 'openai' })).toBe('尚未設定 OpenAI API Key');
+    expect(getProviderSetupNotice({ ...DEFAULT_SETTINGS, llmProvider: 'anthropic' })).toBe('尚未設定 Anthropic Claude API Key');
+  });
+
+  it('有 key 但模型空白時提示模型', () => {
+    const s = setProviderSettings({ ...DEFAULT_SETTINGS, llmProvider: 'openai' }, 'openai', { apiKey: 'k', model: ' ' });
+    expect(getProviderSetupNotice(s)).toBe('尚未設定 OpenAI 模型');
+  });
+
+  it('自訂 provider 不需 key：預設設定即不顯示；Base URL 空白時才提示', () => {
+    const s = { ...DEFAULT_SETTINGS, llmProvider: 'custom' as const };
+    expect(getProviderSetupNotice(s)).toBeNull();
+    expect(isProviderReady(s)).toBe(true);
+    expect(getProviderSetupNotice(setProviderSettings(s, 'custom', { baseUrl: '' }))).toBe(
+      '尚未設定 Ollama／自訂 OpenAI 相容 Base URL'
+    );
   });
 });

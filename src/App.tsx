@@ -34,15 +34,17 @@ import {
 import {
   clearProviderKey,
   getProviderSettings,
-  isProviderReady,
+  getProviderSetupNotice,
   loadSettings,
   saveSettings,
+  setProviderSettings,
 } from './core/settings-store';
 import { enrichGroupsWithParsedDiff, parseGitDiff } from './core/diff-parser';
 import { alignReviewsWithDiff, dropUnverifiedFallbackLines } from './core/line-resolver';
 import { analyzeGitDiff } from './services/review-service';
 import { createProvider, PROVIDER_META } from './providers/registry';
 import { ProviderId } from './providers/types';
+import { OPENROUTER_SUGGESTED_FREE_MODEL, shouldSuggestFreeModel } from './providers/openai-compatible';
 import { SAMPLE_GIT_DIFF } from './services/diff-sources/sample-diffs';
 import { SAMPLE_ANALYSIS_RESULT } from './services/diff-sources/sample-analysis';
 import { AppSettings } from './types/settings';
@@ -86,8 +88,8 @@ function formatGeneratedBy(result: MRAnalysisResult): string | undefined {
 export default function App() {
   // Load settings from localStorage
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
-  const providerReady = isProviderReady(settings);
-  const providerLabel = PROVIDER_META[settings.llmProvider].label;
+  const providerSetupNotice = getProviderSetupNotice(settings);
+  const providerReady = providerSetupNotice === null;
   /** 目前所選 provider / model，作為快取 key 的一部分 */
   const currentProviderModel = {
     provider: settings.llmProvider,
@@ -99,6 +101,9 @@ export default function App() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  /** OpenRouter 分析回 402 額度不足時，在錯誤橫幅提供「改用免費模型」 */
+  const [freeModelSuggestedFor, setFreeModelSuggestedFor] = useState<string | null>(null);
+  const suggestFreeModel = errorMessage !== null && freeModelSuggestedFor === errorMessage;
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [inspectingDiff, setInspectingDiff] = useState<{ file: DiffFile; line?: number | null } | null>(null);
@@ -340,6 +345,13 @@ export default function App() {
     saveSettings(newSettings);
   };
 
+  /** 402 額度不足後一鍵改用 OpenRouter 免費模型（使用者明確點選才切換，不自動 fallback） */
+  const handleUseFreeModel = () => {
+    handleSaveSettings(setProviderSettings(settings, 'openrouter', { model: OPENROUTER_SUGGESTED_FREE_MODEL }));
+    setErrorMessage(null);
+    setInfoMessage(`已改用 OpenRouter 免費模型 ${OPENROUTER_SUGGESTED_FREE_MODEL}，請再按一次「分析」。免費模型有請求次數上限。`);
+  };
+
   /** 「清除 key」：立即從 localStorage 移除該 provider 的金鑰 */
   const handleClearProviderKey = (id: ProviderId) => {
     setSettings(clearProviderKey(settings, id));
@@ -370,6 +382,9 @@ export default function App() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMessage(msg);
+      setFreeModelSuggestedFor(
+        shouldSuggestFreeModel(err, settings.llmProvider, getProviderSettings(settings).model) ? msg : null
+      );
     } finally {
       setIsLoading(false);
       setBatchProgress(null);
@@ -951,8 +966,28 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
             <div className="flex items-start gap-2">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
               <div>
-                <p className="font-semibold text-rose-900">操作過程發生錯誤</p>
+                <p className="font-semibold text-rose-900">
+                  {suggestFreeModel ? '額度不足，可改用免費模型' : '操作過程發生錯誤'}
+                </p>
                 <p className="mt-0.5">{errorMessage}</p>
+                {suggestFreeModel && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleUseFreeModel}
+                      className="px-2.5 py-1 rounded-md bg-surface border border-rose-300 text-rose-800 hover:bg-rose-100 font-semibold"
+                    >
+                      改用免費模型 {OPENROUTER_SUGGESTED_FREE_MODEL}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsSettingsOpen(true)}
+                      className="px-2.5 py-1 rounded-md text-rose-700 hover:underline"
+                    >
+                      到設定挑選其他免費模型
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
             <button
@@ -977,8 +1012,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
               onLoadSampleDiff={handleLoadSampleDiff}
               onLoadSampleAnalysis={handleLoadSampleAnalysis}
               isLoading={isLoading}
-              hasApiKey={providerReady}
-              providerLabel={providerLabel}
+              setupNotice={providerSetupNotice}
               onOpenSettings={() => setIsSettingsOpen(true)}
               // Stage 2 GitLab props
               gitlabMrUrl={gitlabMrUrl}

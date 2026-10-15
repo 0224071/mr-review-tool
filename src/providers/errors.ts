@@ -53,9 +53,19 @@ export function describeHttpError(
   label: string,
   status: number,
   bodyText: string,
-  model?: string
+  model?: string,
+  paymentHint?: string
 ): LlmError {
   const detail = extractErrorMessage(bodyText);
+  if (status === 402) {
+    return new LlmError(
+      'quota',
+      `${label} 額度不足 (402)：帳戶餘額或此 key 的額度上限不足以呼叫${model ? `「${model}」` : '此模型'}。${
+        paymentHint ?? '請儲值或調整 key 的額度上限。'
+      }${detail ? `（${detail}）` : ''}`,
+      status
+    );
+  }
   if (status === 401 || status === 403 || (status === 400 && /api[ _-]?key/i.test(detail))) {
     return new LlmError(
       'auth',
@@ -109,9 +119,9 @@ export async function fetchJson(
   label: string,
   url: string,
   init: RequestInit,
-  options: { model?: string; networkHint?: string; retry?: boolean } = {}
+  options: { model?: string; networkHint?: string; paymentHint?: string; retry?: boolean } = {}
 ): Promise<unknown> {
-  const { model, networkHint, retry = true } = options;
+  const { model, networkHint, paymentHint, retry = true } = options;
   let response: Response;
   for (let attempt = 0; ; attempt++) {
     try {
@@ -124,7 +134,7 @@ export async function fetchJson(
     await retryDelay(RETRY_DELAYS_MS[attempt]);
   }
   if (!response.ok) {
-    throw describeHttpError(label, response.status, await response.text().catch(() => ''), model);
+    throw describeHttpError(label, response.status, await response.text().catch(() => ''), model, paymentHint);
   }
   try {
     return await response.json();

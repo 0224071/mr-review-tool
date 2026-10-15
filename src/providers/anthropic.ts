@@ -91,6 +91,11 @@ export function createAnthropicProvider(config: ProviderSettings): LlmProvider &
       return (json.data ?? []).map((m) => m.id ?? '').filter(Boolean);
     },
 
+    async testConnection() {
+      // /v1/models 需要 x-api-key，壞 key 回 401
+      return { models: (await this.listModels()).map((id) => ({ id })), keyVerified: true };
+    },
+
     review(request) {
       return generateValidated(LABEL, request, async () => {
         try {

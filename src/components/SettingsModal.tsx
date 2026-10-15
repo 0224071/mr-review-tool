@@ -14,7 +14,8 @@ import { AppSettings } from '../types/settings';
 import { getLlmMixedContentWarning, getMixedContentWarning } from '../core/mixed-content';
 import { getProviderSettings, setProviderSettings } from '../core/settings-store';
 import { createProvider, PROVIDER_META } from '../providers/registry';
-import { PROVIDER_IDS, ProviderId, ProviderSettings } from '../providers/types';
+import { describeOpenRouterCredit } from '../providers/openai-compatible';
+import { ModelInfo, OpenRouterKeyInfo, PROVIDER_IDS, ProviderId, ProviderSettings } from '../providers/types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -60,7 +61,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClearKey,
 }) => {
   const [draft, setDraft] = useState<AppSettings>(settings);
-  const [modelLists, setModelLists] = useState<Partial<Record<ProviderId, string[]>>>({});
+  const [modelLists, setModelLists] = useState<Partial<Record<ProviderId, ModelInfo[]>>>({});
+  const [keyInfos, setKeyInfos] = useState<Partial<Record<ProviderId, OpenRouterKeyInfo>>>({});
+  const [freeOnly, setFreeOnly] = useState(false);
   const [testStatus, setTestStatus] = useState<TestStatus>(IDLE);
   const [gitlabTestStatus, setGitlabTestStatus] = useState<TestStatus>(IDLE);
 
@@ -79,6 +82,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const meta = PROVIDER_META[providerId];
   const cfg = getProviderSettings(draft, providerId);
   const models = modelLists[providerId] ?? [];
+  const freeCount = models.filter((m) => m.free).length;
+  const visibleModels = freeOnly && freeCount > 0 ? models.filter((m) => m.free) : models;
+  const currentModelFree =
+    providerId === 'openrouter' &&
+    (cfg.model.trim().endsWith(':free') || models.some((m) => m.id === cfg.model.trim() && m.free));
+  const keyInfo = providerId === 'openrouter' ? keyInfos.openrouter : undefined;
+  const credit = keyInfo ? describeOpenRouterCredit(keyInfo) : null;
   const llmMixedContentWarning = meta.editableBaseUrl ? getLlmMixedContentWarning(cfg.baseUrl ?? '') : null;
   const gitlabMixedContentWarning = getMixedContentWarning(draft.gitlabBaseUrl);
 
@@ -98,7 +108,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTestStatus({ state: 'success', message: `已從此瀏覽器清除 ${meta.label} 的 API Key。` });
   };
 
-  /** 測試連線：呼叫 /models（不耗用生成額度），成功時順便更新模型下拉清單 */
+  /** 測試連線：打需要驗證 key 的 endpoint（不耗用生成額度），成功時順便更新模型下拉清單 */
   const handleTestConnection = async () => {
     if (!meta.keyOptional && !cfg.apiKey.trim()) {
       setTestStatus({ state: 'error', message: `請先填入 ${meta.label} API Key` });
@@ -106,16 +116,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
     setTestStatus({ state: 'testing', message: '連線測試中...' });
     try {
-      const list = await createProvider(providerId, cfg).listModels();
+      const { models: list, keyVerified, keyInfo: info } = await createProvider(providerId, cfg).testConnection();
       setModelLists((prev) => ({ ...prev, [providerId]: list }));
-      const hasModel = !cfg.model.trim() || list.length === 0 || list.includes(cfg.model.trim());
+      if (info) setKeyInfos((prev) => ({ ...prev, [providerId]: info }));
+      const hasModel = !cfg.model.trim() || list.length === 0 || list.some((m) => m.id === cfg.model.trim());
       setTestStatus({
         state: 'success',
-        message: `連線成功，取得 ${list.length} 個模型。${
+        message: `${
+          keyVerified ? '連線成功，API Key 有效' : '已連線（此服務的 /models 不一定檢查 API Key，無法確認 key 是否正確）'
+        }，取得 ${list.length} 個模型。${
           hasModel ? '' : `注意：清單中沒有目前填寫的「${cfg.model}」，請確認 model id。`
         }`,
       });
     } catch (err: unknown) {
+      setKeyInfos((prev) => ({ ...prev, [providerId]: undefined }));
       setTestStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) });
     }
   };
@@ -316,20 +330,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {/* Model */}
             <div className="space-y-1">
-              <label htmlFor="llm-model" className="text-xs font-medium text-muted-dark">
-                模型
-              </label>
+              <div className="flex items-center justify-between">
+                <label htmlFor="llm-model" className="text-xs font-medium text-muted-dark flex items-center gap-1.5">
+                  模型
+                  {currentModelFree && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-success-subtle text-success-text border border-success-border font-medium">
+                      免費
+                    </span>
+                  )}
+                </label>
+                {freeCount > 0 && (
+                  <label className="text-[11px] text-muted-dark flex items-center gap-1 cursor-pointer">
+                    <input type="checkbox" checked={freeOnly} onChange={(e) => setFreeOnly(e.target.checked)} />
+                    只看免費（{freeCount}）
+                  </label>
+                )}
+              </div>
               {models.length > 0 && (
                 <select
                   aria-label="從清單選擇模型"
-                  value={models.includes(cfg.model) ? cfg.model : ''}
+                  value={visibleModels.some((m) => m.id === cfg.model) ? cfg.model : ''}
                   onChange={(e) => e.target.value && updateProvider({ model: e.target.value })}
                   className={inputClass}
                 >
-                  <option value="">從 /models 清單選擇（{models.length} 個）</option>
-                  {models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
+                  <option value="">
+                    從 /models 清單選擇（{visibleModels.length} 個{freeCount > 0 ? `，其中免費 ${freeCount} 個` : ''}）
+                  </option>
+                  {visibleModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.free ? `【免費】${m.id}` : m.id}
                     </option>
                   ))}
                 </select>
@@ -345,6 +374,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {models.length === 0 && (
                 <p className="text-[11px] text-muted">按「測試連線」可從 /models 取得模型清單，或直接手動輸入 model id。</p>
               )}
+              {currentModelFree && (
+                <p className="text-[11px] text-muted">
+                  免費模型有每分鐘／每日請求上限，部分供應商可能記錄 prompt；送出公司程式碼前請確認 OpenRouter 的隱私設定。
+                </p>
+              )}
             </div>
 
             <div className="flex items-center gap-2 pt-1">
@@ -358,7 +392,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {testStatus.state === 'testing' ? '測試中...' : '測試連線'}
               </button>
             </div>
+            {meta.editableBaseUrl && (
+              <p className="text-[11px] text-muted">
+                自訂服務的「測試連線」只呼叫 /models（best-effort），Ollama 等服務通常不檢查 API Key，成功不代表 key 正確。
+              </p>
+            )}
             <StatusLine status={testStatus} />
+            {credit && testStatus.state === 'success' && (
+              <p
+                className={`text-xs flex items-start gap-1 ${credit.warn ? 'text-warning-text' : 'text-muted'}`}
+                data-testid="openrouter-credit"
+              >
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {credit.message}
+              </p>
+            )}
           </div>
 
           {/* Security Notice */}

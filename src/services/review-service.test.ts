@@ -56,6 +56,7 @@ describe('analyzeGitDiff（provider 切換）', () => {
       label: 'Fake',
       model: 'm',
       listModels: async () => [],
+      testConnection: async () => ({ models: [], keyVerified: true }),
       review: (async (req: { kind: string }) => {
         kinds.push(req.kind);
         return structuredClone(VALID_RESULT);

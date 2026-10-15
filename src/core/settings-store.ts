@@ -2,6 +2,7 @@
  * 設定的 localStorage 讀寫與 provider 設定存取（純函式，storage 可注入以便測試）。
  * 金鑰只寫入使用者瀏覽器 localStorage，不送往其他地方。
  */
+import { PROVIDER_META } from '../providers/registry';
 import { PROVIDER_IDS, ProviderId, ProviderSettings } from '../providers/types';
 import { AppSettings, DEFAULT_SETTINGS, NonGeminiProviderId } from '../types/settings';
 
@@ -80,8 +81,18 @@ export function clearProviderKey(
 
 /** 目前所選 provider 是否已可呼叫（自訂 OpenAI 相容服務可不填 key） */
 export function isProviderReady(settings: AppSettings, id: ProviderId = settings.llmProvider): boolean {
+  return getProviderSetupNotice(settings, id) === null;
+}
+
+/**
+ * 目前所選 provider 尚缺的設定，作為「分析」按鈕下方的提示文字；已可呼叫時回傳 null。
+ * 不需要 key 的自訂 OpenAI 相容服務（Ollama）只檢查 Base URL 與模型。
+ */
+export function getProviderSetupNotice(settings: AppSettings, id: ProviderId = settings.llmProvider): string | null {
+  const meta = PROVIDER_META[id];
   const cfg = getProviderSettings(settings, id);
-  if (!cfg.model?.trim()) return false;
-  if (id === 'custom') return Boolean(cfg.baseUrl?.trim());
-  return Boolean(cfg.apiKey?.trim());
+  if (!meta.keyOptional && !cfg.apiKey?.trim()) return `尚未設定 ${meta.label} API Key`;
+  if (meta.editableBaseUrl && !cfg.baseUrl?.trim()) return `尚未設定 ${meta.label} Base URL`;
+  if (!cfg.model?.trim()) return `尚未設定 ${meta.label} 模型`;
+  return null;
 }

@@ -55,6 +55,8 @@ export interface MRReviewItem {
   newLine?: number | null;
   oldLine?: number | null;
   lineVerified?: boolean;
+  /** AI 原本給的行號；只在依 codeSnippet 修正成不同行時記錄 */
+  aiLine?: number | null;
   checklistId?: string | null;
 }
 
