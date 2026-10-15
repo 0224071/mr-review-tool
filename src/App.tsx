@@ -70,6 +70,7 @@ import {
   updateGitLabNote,
 } from './services/gitlab-api';
 import { publishReviewBatch } from './services/review-publisher';
+import { resolveEffectiveSuggestion } from './core/review-text';
 import { AlertCircle, DatabaseZap, Info, Sparkles } from 'lucide-react';
 
 type PublishItem = {
@@ -834,7 +835,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
             index: item.index,
             review: item.review,
             comment: item.customComment || item.review.comment,
-            suggestion: item.customSuggestion || item.review.suggestion,
+            suggestion: resolveEffectiveSuggestion(item.customSuggestion, item.review.suggestion),
           })),
           diffRefs,
           {
@@ -856,7 +857,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                   markPublished(
                     item,
                     item.customComment || item.review.comment,
-                    item.customSuggestion || item.review.suggestion,
+                    resolveEffectiveSuggestion(item.customSuggestion, item.review.suggestion),
                     result.discussionId
                   );
                 }

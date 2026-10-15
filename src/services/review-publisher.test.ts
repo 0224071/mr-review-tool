@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildDiscussionPosition, plannedPublishMode, publishReviewBatch, publishReviewItem } from './review-publisher';
 import { MRReviewItem } from '../types/review';
+import { resolveEffectiveSuggestion } from '../core/review-text';
 import { GitLabDiffRefs } from '../types/gitlab';
 
 const TARGET = { baseUrl: 'https://gitlab.example.com', token: 'tkn', projectPath: 'grp/proj', mrIid: 7 };
@@ -189,6 +190,28 @@ describe('留言內文的修改建議段落', () => {
     const posts = calls.filter((c) => c.method === 'POST');
     expect(posts[0].body?.body).not.toContain(SUGGESTION_HEADING);
     expect(posts[1].body?.body).toContain(`${SUGGESTION_HEADING}：\n> 有建議`);
+  });
+});
+
+describe('發布路徑：使用者清空建議', () => {
+  it('草稿清空或只有空白：發布內文不帶修改建議段落，也不帶 AI 原建議；沒有草稿才用原建議', async () => {
+    const calls = mockGitLab({ discussion: (_b, nth) => json({ id: `d-${nth}` }) });
+    const ai = review();
+    await publishReviewBatch(
+      TARGET,
+      [
+        { index: 0, review: ai, comment: 'a', suggestion: resolveEffectiveSuggestion('', ai.suggestion) },
+        { index: 1, review: ai, comment: 'b', suggestion: resolveEffectiveSuggestion('  \n ', ai.suggestion) },
+        { index: 2, review: ai, comment: 'c', suggestion: resolveEffectiveSuggestion(undefined, ai.suggestion) },
+      ],
+      REFS
+    );
+    const posts = calls.filter((c) => c.method === 'POST');
+    for (const post of posts.slice(0, 2)) {
+      expect(post.body?.body).not.toContain('修改建議');
+      expect(post.body?.body).not.toContain(ai.suggestion);
+    }
+    expect(posts[2].body?.body).toContain(`修改建議**：\n> ${ai.suggestion}`);
   });
 });
 

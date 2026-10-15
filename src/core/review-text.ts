@@ -16,3 +16,15 @@ export const formatReviewForCopy = (
   const head = `**[${severityLabel}] ${categoryLabel}**: ${comment}`;
   return hasSuggestion(suggestion) ? `${head}\n\n> 💡 **修改建議**：\n> ${suggestion}` : head;
 };
+
+/**
+ * 實際要輸出的建議：有草稿（不是 undefined）就用草稿，即使使用者清空了也不退回 AI 原本的建議；
+ * 沒有草稿才用原值。空建議回傳空字串，其餘回傳 trim 過的內容。
+ */
+export const resolveEffectiveSuggestion = (
+  draft: string | undefined,
+  original: string | undefined
+): string => {
+  const suggestion = draft !== undefined ? draft : original;
+  return hasSuggestion(suggestion) ? suggestion.trim() : '';
+};
