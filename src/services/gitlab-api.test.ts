@@ -6,6 +6,7 @@ import {
   GitLabApiError,
 } from './gitlab-api';
 import { GitLabNote } from '../types/gitlab';
+import { MIXED_CONTENT_MESSAGE } from '../core/mixed-content';
 
 const note = (id: number): GitLabNote => ({
   id,
@@ -118,5 +119,29 @@ describe('createGitLabDiscussion / createGitLabGeneralDiscussion', () => {
     expect(err).toBeInstanceOf(GitLabApiError);
     expect(err.status).toBe(400);
     expect(err.message).toContain('line_code invalid');
+  });
+});
+
+describe('混合內容防護', () => {
+  it('https 頁面連 http GitLab 時不發出請求並回傳提示', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('location', { protocol: 'https:' });
+
+    await expect(fetchGitLabMrNotes('http://gitlab.example.com', 't', 'g/p', 1)).rejects.toThrow(
+      MIXED_CONTENT_MESSAGE
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('一般留言（discussions）同樣受混合內容檢查', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('location', { protocol: 'https:' });
+
+    await expect(
+      createGitLabGeneralDiscussion('http://gitlab.example.com', 't', 'g/p', 1, 'hi')
+    ).rejects.toThrow(MIXED_CONTENT_MESSAGE);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

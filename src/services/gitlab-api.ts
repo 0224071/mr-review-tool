@@ -5,6 +5,7 @@ import {
   ParsedGitLabUrl,
 } from '../types/gitlab';
 import { MRAnalysisResult } from '../types/review';
+import { getMixedContentWarning } from '../core/mixed-content';
 
 export const SHARED_TAG_START = '<!-- GITLAB_MR_REVIEWER_START v=1 -->';
 export const SHARED_TAG_END = '<!-- GITLAB_MR_REVIEWER_END -->';
@@ -55,6 +56,17 @@ export class GitLabApiError extends Error {
 }
 
 /**
+ * fetch 包裝：https 頁面連 http GitLab 會被瀏覽器擋下，先給出明確提示
+ */
+function gitlabFetch(url: string, init?: RequestInit): Promise<Response> {
+  const warning = getMixedContentWarning(url);
+  if (warning) {
+    return Promise.reject(new Error(warning));
+  }
+  return fetch(url, init);
+}
+
+/**
  * Builds standard GitLab headers
  */
 function getHeaders(token?: string): HeadersInit {
@@ -72,7 +84,7 @@ function getHeaders(token?: string): HeadersInit {
  */
 export async function testGitLabConnection(baseUrl: string, token: string): Promise<{ username: string; name: string }> {
   const cleanBase = baseUrl.replace(/\/$/, '');
-  const res = await fetch(`${cleanBase}/api/v4/user`, {
+  const res = await gitlabFetch(`${cleanBase}/api/v4/user`, {
     headers: getHeaders(token),
   });
 
@@ -100,7 +112,7 @@ export async function fetchGitLabMergeRequest(
   const encodedPath = encodeURIComponent(projectPath);
   const url = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}`;
 
-  const res = await fetch(url, { headers: getHeaders(token) });
+  const res = await gitlabFetch(url, { headers: getHeaders(token) });
   if (!res.ok) {
     if (res.status === 404) {
       throw new Error(`找不到該專案或 Merge Request (#${mrIid})，請檢查專案路徑與 PAT 權限`);
@@ -129,7 +141,7 @@ export async function fetchGitLabMrRawDiff(
   // 1. Try raw_diff endpoint first
   try {
     const rawUrl = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/raw_diff`;
-    const res = await fetch(rawUrl, {
+    const res = await gitlabFetch(rawUrl, {
       headers: {
         ...(token ? { 'PRIVATE-TOKEN': token.trim() } : {}),
       },
@@ -147,7 +159,7 @@ export async function fetchGitLabMrRawDiff(
 
   // 2. Fallback: fetch /diffs array and convert to unified diff
   const diffsUrl = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/diffs?per_page=100`;
-  const res = await fetch(diffsUrl, { headers: getHeaders(token) });
+  const res = await gitlabFetch(diffsUrl, { headers: getHeaders(token) });
   if (!res.ok) {
     throw new Error(`無法取得 MR Diff (${res.status})，請確認專案權限與 Token`);
   }
@@ -194,7 +206,7 @@ export async function fetchGitLabMrNotes(
   let page: number | null = 1;
   for (let fetched = 0; page !== null && fetched < NOTES_MAX_PAGES; fetched++) {
     const url = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/notes?per_page=${NOTES_PER_PAGE}&page=${page}&sort=desc`;
-    const res = await fetch(url, { headers: getHeaders(token) });
+    const res = await gitlabFetch(url, { headers: getHeaders(token) });
     if (!res.ok) {
       if (page === 1) return [];
       throw new Error(`讀取 MR 留言失敗 (第 ${page} 頁，${res.status})`);
@@ -268,7 +280,7 @@ export async function createGitLabDiscussion(
   const encodedPath = encodeURIComponent(projectPath);
   const url = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/discussions`;
 
-  const res = await fetch(url, {
+  const res = await gitlabFetch(url, {
     method: 'POST',
     headers: getHeaders(token),
     body: JSON.stringify(payload),
@@ -322,7 +334,7 @@ export async function createGitLabNote(
   const encodedPath = encodeURIComponent(projectPath);
   const url = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/notes`;
 
-  const res = await fetch(url, {
+  const res = await gitlabFetch(url, {
     method: 'POST',
     headers: getHeaders(token),
     body: JSON.stringify({ body }),
@@ -359,7 +371,7 @@ export async function updateGitLabNote(
   const encodedPath = encodeURIComponent(projectPath);
   const url = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/notes/${noteId}`;
 
-  const res = await fetch(url, {
+  const res = await gitlabFetch(url, {
     method: 'PUT',
     headers: getHeaders(token),
     body: JSON.stringify({ body }),

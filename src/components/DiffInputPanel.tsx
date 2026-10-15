@@ -17,6 +17,7 @@ import {
 import { ParsedDiff } from '../types/diff';
 import { MRAnalysisResult } from '../types/review';
 import { GitLabMergeRequestInfo } from '../types/gitlab';
+import { getMixedContentWarning } from '../core/mixed-content';
 
 interface DiffInputPanelProps {
   rawDiff: string;
@@ -67,6 +68,7 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
   hasResult = false,
 }) => {
   const [sourceTab, setSourceTab] = useState<'gitlab' | 'manual'>('gitlab');
+  const mrUrlMixedContentWarning = getMixedContentWarning(gitlabMrUrl);
   const [isDragging, setIsDragging] = useState(false);
   // Default collapsed when there is an analysis result
   const [isDiffExpanded, setIsDiffExpanded] = useState(!hasResult);
@@ -231,6 +233,12 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
                   )}
                 </button>
               </div>
+              {mrUrlMixedContentWarning && (
+                <p className="text-[11px] text-amber-700 flex items-start gap-1">
+                  <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+                  {mrUrlMixedContentWarning}
+                </p>
+              )}
             </form>
 
             {/* Error notice if fetch failed */}
