@@ -111,11 +111,11 @@ const SEVERITY_META: Record<
   },
 };
 
-/** 單則發布與重試入口：有發布作業進行中（或此則發送中）時忽略點擊 */
 /** 畫面上檔名後顯示的行號（修正後的 line）；勾選框的 aria-label 也用這個，讀到的和看到的一致 */
 export const displayLineText = (review: Pick<MRReviewItem, 'line' | 'lineVerified'>): string =>
   review.line !== null ? `:L${review.line}` : review.lineVerified === false ? ':行號未驗證' : '';
 
+/** 單則發布與重試入口：有發布作業進行中（或此則發送中）時忽略點擊 */
 export const runUnlessPublishing = (blocked: boolean, action: () => void) => {
   if (!blocked) action();
 };

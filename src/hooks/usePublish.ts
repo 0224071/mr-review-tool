@@ -1,0 +1,405 @@
+/**
+ * 發布到 GitLab：重複發布比對與警告、發布確認視窗、逐則／整體摘要發布，以及分享分析報告。
+ * 發布結果寫回 useAnalysis 持有的發布狀態與已發布紀錄（隨結果保存到歷史紀錄）。
+ */
+import { useMemo, useState } from 'react';
+import { DraftEdits } from '../core/history-store';
+import { createPublishedRecord, findPublishedMatches, partitionDuplicates } from '../core/publish-dedup';
+import { MRReviewItem } from '../types/review';
+import { findExistingOverallNote, SUMMARY_TAG } from '../services/gitlab-api';
+import { PublishTarget } from '../services/review-publisher';
+import { filterPublishableItems, resolveEffectiveComment, resolveEffectiveSuggestion } from '../core/review-text';
+import { GitLabGateway, withNotice } from '../app/app-services';
+import type { SettingsState } from './useSettings';
+import type { AnalysisState } from './useAnalysis';
+
+export type PublishItem = {
+  review: MRReviewItem;
+  customComment?: string;
+  customSuggestion?: string;
+  index: number;
+};
+
+export interface UsePublishOptions {
+  gitlab: GitLabGateway;
+  settings: Pick<SettingsState, 'settings' | 'setIsSettingsOpen'>;
+  analysis: Pick<
+    AnalysisState,
+    | 'analysisResult'
+    | 'currentGitLabMr'
+    | 'gitlabMrUrl'
+    | 'resultDiffRefs'
+    | 'remoteNotes'
+    | 'setRemoteNotes'
+    | 'draftEdits'
+    | 'publishedRecords'
+    | 'setPublishedRecords'
+    | 'setSelectedIndices'
+    | 'setPublishStates'
+    | 'setIsSummaryPublished'
+    | 'setIsSharedToMrPublished'
+    | 'setErrorMessage'
+    | 'setInfoMessage'
+  >;
+}
+
+export function usePublish({ gitlab, settings: settingsState, analysis }: UsePublishOptions) {
+  const { settings, setIsSettingsOpen } = settingsState;
+  const {
+    analysisResult,
+    currentGitLabMr,
+    gitlabMrUrl,
+    resultDiffRefs,
+    remoteNotes,
+    setRemoteNotes,
+    draftEdits,
+    publishedRecords,
+    setPublishedRecords,
+    setSelectedIndices,
+    setPublishStates,
+    setIsSummaryPublished,
+    setIsSharedToMrPublished,
+    setErrorMessage,
+    setInfoMessage,
+  } = analysis;
+
+  const [isSharingToMr, setIsSharingToMr] = useState<boolean>(false);
+
+  // Confirmation Modal state
+  const [isPublishModalOpen, setIsPublishModalOpen] = useState<boolean>(false);
+  const [isPublishingInProgress, setIsPublishingInProgress] = useState<boolean>(false);
+  const [publishModalConfig, setPublishModalConfig] = useState<{
+    isPublishingSummary: boolean;
+    itemsToPublish: Array<{
+      review: MRReviewItem;
+      customComment?: string;
+      customSuggestion?: string;
+      index: number;
+    }>;
+  }>({
+    isPublishingSummary: false,
+    itemsToPublish: [],
+  });
+  const [duplicateWarning, setDuplicateWarning] = useState<{ fresh: PublishItem[]; duplicates: PublishItem[] } | null>(null);
+
+  // 發布時使用的 diff_refs：結果產生時的版本 → 目前 MR → 服務提供的備用版本（示範模式）
+  const publishDiffRefs = resultDiffRefs ?? currentGitLabMr?.diff_refs ?? gitlab.fallbackDiffRefs;
+  /** 發布目標 MR 網址：目前 MR 優先，否則用輸入框的網址 */
+  const mrUrl = currentGitLabMr?.web_url || gitlabMrUrl;
+
+  const publishedMatches = useMemo(() => {
+    if (!analysisResult) return {};
+    return findPublishedMatches(analysisResult.reviews, draftEdits, publishedRecords, remoteNotes);
+  }, [analysisResult, draftEdits, publishedRecords, remoteNotes]);
+
+  /** 要發布的意見內文：草稿優先，清空也不退回 AI 原值 */
+  const publishCommentFor = (item: PublishItem) => resolveEffectiveComment(item.customComment, item.review.comment);
+
+  const openPublishModal = (items: PublishItem[]) => {
+    setPublishModalConfig({
+      isPublishingSummary: false,
+      itemsToPublish: items,
+    });
+    setIsPublishModalOpen(true);
+  };
+
+  /**
+   * 發布前比對本地發布紀錄＋MR 現有留言；有重複時先跳橘色警告，按「仍要發布」才進原本的發布確認。
+   */
+  const requestPublishReviews = async (requested: PublishItem[]) => {
+    if (!gitlab.isConfigured(settings)) {
+      setIsSettingsOpen(true);
+      return;
+    }
+    if (!analysisResult || requested.length === 0 || isPublishingInProgress) return;
+    // 內文是空的意見不發布（「發布已選」、單則發布與重試共用此入口）
+    const items = filterPublishableItems(requested);
+    if (items.length < requested.length) {
+      setInfoMessage(`已略過 ${requested.length - items.length} 則內文是空的意見，不會發布。`);
+    }
+    if (items.length === 0) return;
+
+    let notes = remoteNotes;
+    try {
+      const fresh = await gitlab.fetchNotes(gitlab.resolveTarget(mrUrl, settings));
+      if (fresh.length > 0) {
+        notes = fresh;
+        setRemoteNotes(fresh);
+      }
+    } catch {
+      // 沒有目標 MR 或讀不到留言時，只用本地紀錄與先前讀到的留言比對
+    }
+
+    const drafts: DraftEdits = { ...draftEdits };
+    items.forEach((item) => {
+      if (item.customComment !== undefined || item.customSuggestion !== undefined) {
+        drafts[item.index] = {
+          comment: item.customComment ?? item.review.comment,
+          suggestion: item.customSuggestion ?? item.review.suggestion,
+        };
+      }
+    });
+    const matches = findPublishedMatches(analysisResult.reviews, drafts, publishedRecords, notes);
+    const { fresh, duplicates } = partitionDuplicates(items, matches);
+    if (duplicates.length > 0) {
+      setDuplicateWarning({ fresh, duplicates });
+      return;
+    }
+    openPublishModal(fresh);
+  };
+
+  // Stage 2: Single Review Comment Publish Trigger
+  const handlePublishSingleReview = (
+    review: MRReviewItem,
+    customComment?: string,
+    customSuggestion?: string,
+    index?: number
+  ) => {
+    // 單則發布與重試入口：有發布作業進行中時忽略
+    if (isPublishingInProgress) return;
+    void requestPublishReviews([
+      {
+        review,
+        customComment,
+        customSuggestion,
+        index: index !== undefined ? index : 0,
+      },
+    ]);
+  };
+
+  // Stage 2: Batch Review Comments Publish Trigger
+  const handlePublishBatchReviews = (items: PublishItem[]) => {
+    void requestPublishReviews(items);
+  };
+
+  // Stage 2: Publish General Summary to MR Note Trigger
+  const handlePublishSummaryToMr = () => {
+    if (!gitlab.isConfigured(settings)) {
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    setPublishModalConfig({
+      isPublishingSummary: true,
+      itemsToPublish: [],
+    });
+    setIsPublishModalOpen(true);
+  };
+
+  /** 發布成功：寫入本地發布紀錄並取消勾選 */
+  const markPublished = (
+    item: PublishItem,
+    commentText: string,
+    suggestionText: string,
+    discussionId: string | number
+  ) => {
+    setPublishedRecords((prev) => [
+      ...prev,
+      createPublishedRecord(item.review, commentText, suggestionText, discussionId),
+    ]);
+    setSelectedIndices((prev) => {
+      const next = new Set(prev);
+      next.delete(item.index);
+      return next;
+    });
+  };
+
+  // Stage 2: Confirm and Execute Publishing (Discussions API or Notes API)
+  const handleConfirmPublish = async () => {
+    let target: PublishTarget;
+    try {
+      target = gitlab.resolveTarget(mrUrl, settings);
+    } catch (e: unknown) {
+      setErrorMessage(e instanceof Error ? e.message : '無效的 GitLab MR 網址');
+      setIsPublishModalOpen(false);
+      return;
+    }
+
+    setIsPublishingInProgress(true);
+
+    try {
+      if (publishModalConfig.isPublishingSummary) {
+        // Publish General Summary Note
+        if (!analysisResult) return;
+
+        // 4. 整體留言去重：送出「整體摘要」前，先讀取 MR notes
+        const notes = await gitlab.fetchNotes(target);
+        const { sharedNote, summaryNote } = findExistingOverallNote(notes);
+
+        if (sharedNote) {
+          // 若已存在分享報告留言（含 GITLAB_MR_REVIEWER_START 標記），就不再另外發整體摘要，改為提示使用者「分享報告已包含摘要」
+          setInfoMessage('分享報告已包含摘要，無需重複發布整體留言。');
+          setIsSummaryPublished(true);
+          setIsPublishModalOpen(false);
+          setIsPublishingInProgress(false);
+          return;
+        }
+
+        const summaryBody = `${SUMMARY_TAG}
+### 📋 MR 審查整體摘要
+
+**標題**：${analysisResult.title}
+
+#### 主要變更摘要
+${analysisResult.summary.map((s) => `- ${s}`).join('\n')}
+
+#### 意圖分組 (${analysisResult.groups.length} 組)
+${analysisResult.groups.map((g) => `- **${g.name}** (+${g.additions} / -${g.deletions}): ${g.summary}`).join('\n')}
+
+#### 建議測試清單
+${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
+
+---
+*由 GitLab MR 講解與審查工具自動發布*`;
+
+        if (summaryNote) {
+          await gitlab.updateNote(target, summaryNote.id, summaryBody);
+        } else {
+          await gitlab.createNote(target, summaryBody);
+        }
+
+        setIsSummaryPublished(true);
+        setInfoMessage(withNotice('已發布整體摘要。', gitlab.notice));
+      } else {
+        // Publish Review Items via Discussions API
+        // 使用產生目前結果時的 diff_refs，行號才會對到同一個版本
+
+        const items = publishModalConfig.itemsToPublish;
+        const byIndex = new Map(items.map((item) => [item.index, item]));
+        const outcomes = await gitlab.publishBatch(
+          target,
+          items.map((item) => ({
+            index: item.index,
+            review: item.review,
+            comment: publishCommentFor(item),
+            suggestion: resolveEffectiveSuggestion(item.customSuggestion, item.review.suggestion),
+          })),
+          publishDiffRefs,
+          {
+            onStart: (index) => setPublishStates((prev) => ({ ...prev, [index]: { status: 'sending' } })),
+            onDone: (outcome) => {
+              if (outcome.ok) {
+                const { result } = outcome;
+                setPublishStates((prev) => ({
+                  ...prev,
+                  [outcome.index]: {
+                    status: 'published',
+                    discussionId: result.discussionId,
+                    mode: result.mode,
+                    fallbackReason: result.fallbackReason,
+                    notice: result.notice,
+                  },
+                }));
+                const item = byIndex.get(outcome.index);
+                if (item) {
+                  markPublished(
+                    item,
+                    publishCommentFor(item),
+                    resolveEffectiveSuggestion(item.customSuggestion, item.review.suggestion),
+                    result.discussionId
+                  );
+                }
+              } else {
+                setPublishStates((prev) => ({
+                  ...prev,
+                  [outcome.index]: { status: 'error', errorMessage: outcome.error },
+                }));
+              }
+            },
+          }
+        );
+        const failed = outcomes.filter((o) => !o.ok).length;
+        if (outcomes.length > 1 || failed > 0) {
+          setInfoMessage(
+            withNotice(
+              failed > 0
+                ? `已發布 ${outcomes.length - failed} 則，失敗 ${failed} 則；失敗的項目可在清單中按「重試」。`
+                : `已發布 ${outcomes.length} 則審查意見。`,
+              gitlab.notice
+            )
+          );
+        }
+      }
+    } catch (generalErr: unknown) {
+      setErrorMessage(
+        generalErr instanceof Error ? generalErr.message : '發布至 GitLab 過程中發生錯誤'
+      );
+    } finally {
+      setIsPublishingInProgress(false);
+      setIsPublishModalOpen(false);
+    }
+  };
+
+  // Stage 2: Mechanism 1 - Post complete analysis JSON back to MR note
+  const handleShareAnalysisToMr = async () => {
+    if (!analysisResult) return;
+    let target: PublishTarget;
+    try {
+      target = gitlab.resolveTarget(mrUrl, settings);
+    } catch {
+      setErrorMessage('請先提供目標 GitLab MR 網址以發布共享報告');
+      return;
+    }
+
+    if (!gitlab.isConfigured(settings)) {
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    setIsSharingToMr(true);
+    try {
+      // 4. 整體留言去重：若使用者先發整體摘要、後發分享報告，分享報告改為更新既有的摘要留言，讓 MR 上只保留一則整體留言
+      const notes = await gitlab.fetchNotes(target);
+      const { sharedNote, summaryNote } = findExistingOverallNote(notes);
+      const targetNoteId = sharedNote ? sharedNote.id : summaryNote ? summaryNote.id : null;
+
+      await gitlab.shareAnalysis(target, analysisResult, targetNoteId);
+      setIsSharedToMrPublished(true);
+      setIsSummaryPublished(true);
+      setInfoMessage(withNotice('已共享分析報告。', gitlab.notice));
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : '分享報告至 MR 留言失敗');
+    } finally {
+      setIsSharingToMr(false);
+    }
+  };
+
+  /** 重複發布警告的「仍要全部發布」：未發布與重複的一起依原順序送進發布確認 */
+  const publishAllDespiteDuplicates = () => {
+    const items = duplicateWarning ? [...duplicateWarning.fresh, ...duplicateWarning.duplicates] : [];
+    setDuplicateWarning(null);
+    openPublishModal(items.sort((a, b) => a.index - b.index));
+  };
+
+  /** 重複發布警告的主要按鈕：有未發布的只發未發布的，否則仍要重複發布 */
+  const confirmDuplicateWarning = () => {
+    if (!duplicateWarning) return;
+    const items = duplicateWarning.fresh.length > 0 ? duplicateWarning.fresh : duplicateWarning.duplicates;
+    setDuplicateWarning(null);
+    openPublishModal(items);
+  };
+
+  const cancelDuplicateWarning = () => setDuplicateWarning(null);
+
+  return {
+    mrUrl,
+    publishDiffRefs,
+    publishedMatches,
+    isPublishModalOpen,
+    setIsPublishModalOpen,
+    isPublishingInProgress,
+    publishModalConfig,
+    isSharingToMr,
+    duplicateWarning,
+    handlePublishSingleReview,
+    handlePublishBatchReviews,
+    handlePublishSummaryToMr,
+    handleConfirmPublish,
+    handleShareAnalysisToMr,
+    publishAllDespiteDuplicates,
+    confirmDuplicateWarning,
+    cancelDuplicateWarning,
+  };
+}
+
+export type PublishState = ReturnType<typeof usePublish>;
