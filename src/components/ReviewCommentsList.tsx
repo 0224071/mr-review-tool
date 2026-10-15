@@ -68,8 +68,6 @@ interface ReviewCommentsListProps {
   onSelectIndicesChange?: (next: Set<number>) => void;
   draftEdits?: Record<number, { comment: string; suggestion: string }>;
   onDraftEditsChange?: (drafts: Record<number, { comment: string; suggestion: string }>) => void;
-  /** 內文清空（或只有空白）的意見就地提示，並停用勾選與複製；示範模式不開啟 */
-  blockEmptyComment?: boolean;
 }
 
 const CATEGORY_META: Record<
@@ -128,7 +126,6 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
   onSelectIndicesChange,
   draftEdits: controlledDraftEdits,
   onDraftEditsChange,
-  blockEmptyComment = false,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<ReviewCategory | 'all'>('all');
   const [selectedSeverity, setSelectedSeverity] = useState<ReviewSeverity | 'all'>('all');
@@ -270,7 +267,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
 
   /** 內文（草稿優先）是空的，不能勾選、複製或發布 */
   const isCommentEmpty = (index: number) =>
-    blockEmptyComment && !hasCommentText(resolveEffectiveComment(draftEdits[index]?.comment, reviews[index]?.comment));
+    !hasCommentText(resolveEffectiveComment(draftEdits[index]?.comment, reviews[index]?.comment));
 
   const handleToggleSelect = (index: number) => {
     if (isCommentEmpty(index)) return;
@@ -324,9 +321,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
 
   const handleCopyReview = (review: MRReviewItem, index: number) => {
     if (isCommentEmpty(index)) return;
-    const comment = blockEmptyComment
-      ? resolveEffectiveComment(draftEdits[index]?.comment, review.comment)
-      : draftEdits[index]?.comment || review.comment;
+    const comment = resolveEffectiveComment(draftEdits[index]?.comment, review.comment);
     const suggestion = resolveEffectiveSuggestion(draftEdits[index]?.suggestion, review.suggestion);
     const formatted = formatReviewForCopy(
       SEVERITY_META[review.severity].label,
@@ -633,10 +628,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                             },
                           }));
                           // 清空時自動取消勾選；補上內文後不自動勾回
-                          if (blockEmptyComment) {
-                            const next = deselectIfCommentEmpty(selectedIndices, originalIndex, e.target.value);
-                            if (next !== selectedIndices) setSelectedIndices(next);
-                          }
+                          const next = deselectIfCommentEmpty(selectedIndices, originalIndex, e.target.value);
+                          if (next !== selectedIndices) setSelectedIndices(next);
                         }}
                         rows={2}
                         className="w-full p-2 border border-slate-300 rounded-md font-sans text-xs focus:ring-1 focus:ring-primary focus:outline-none bg-white"

@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   deselectIfCommentEmpty,
+  filterPublishableItems,
   formatReviewForCopy,
   hasCommentText,
   hasSuggestion,
   resolveEffectiveComment,
   resolveEffectiveSuggestion,
 } from './review-text';
+import { SAMPLE_ANALYSIS_RESULT } from '../services/diff-sources/sample-analysis';
 
 describe('formatReviewForCopy', () => {
   it('有建議時保留原格式', () => {
@@ -104,5 +106,22 @@ describe('deselectIfCommentEmpty', () => {
     expect(afterRefill).toBe(afterClear);
     const untouched = new Set([3]);
     expect(deselectIfCommentEmpty(untouched, 1, '')).toBe(untouched);
+  });
+});
+
+describe('filterPublishableItems', () => {
+  it('範例資料（sample diff / demo 結果）內文清空也不發布，不退回 AI 原本的內文', () => {
+    const [first, second, third] = SAMPLE_ANALYSIS_RESULT.reviews;
+    const items = [
+      { review: first, customComment: '', index: 0 },
+      { review: second, customComment: '  \n\t ', index: 1 },
+      { review: third, index: 2 },
+    ];
+    expect(filterPublishableItems(items).map((item) => item.index)).toEqual([2]);
+  });
+
+  it('有內文（草稿或原值）的意見保留', () => {
+    const review = SAMPLE_ANALYSIS_RESULT.reviews[0];
+    expect(filterPublishableItems([{ review, customComment: '改過的內文', index: 0 }, { review, index: 1 }])).toHaveLength(2);
   });
 });

@@ -41,6 +41,11 @@ export const resolveEffectiveComment = (draft: string | undefined, original: str
   return hasCommentText(comment) ? comment.trim() : '';
 };
 
+/** 發布前過濾：實際內文（草稿優先、清空不退回 AI 原值）是空的意見不發布；範例／示範結果也一樣 */
+export const filterPublishableItems = <T extends { review: { comment: string }; customComment?: string }>(
+  items: T[]
+): T[] => items.filter((item) => hasCommentText(resolveEffectiveComment(item.customComment, item.review.comment)));
+
 /** 內文是空的提示文字（清單就地提示、發布被擋下時共用） */
 export const EMPTY_COMMENT_MESSAGE = '內文是空的，不會發布';
 

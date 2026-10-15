@@ -70,7 +70,7 @@ import {
   updateGitLabNote,
 } from './services/gitlab-api';
 import { publishReviewBatch } from './services/review-publisher';
-import { hasCommentText, resolveEffectiveComment, resolveEffectiveSuggestion } from './core/review-text';
+import { filterPublishableItems, resolveEffectiveComment, resolveEffectiveSuggestion } from './core/review-text';
 import { AlertCircle, DatabaseZap, Info, Sparkles } from 'lucide-react';
 
 type PublishItem = {
@@ -630,12 +630,8 @@ export default function App() {
     setInspectingDiff({ file, line });
   };
 
-  /** 載入範例分析（示範模式）：沒有分析時間且 diff 為範例；內文清空的防護只套用在一般模式 */
-  const isDemoResult = analyzedAt === null && resultRawDiff === SAMPLE_GIT_DIFF;
-
-  /** 要發布的意見內文：一般模式草稿優先（清空也不退回 AI 原值），示範模式維持原本行為 */
-  const publishCommentFor = (item: PublishItem) =>
-    isDemoResult ? item.customComment || item.review.comment : resolveEffectiveComment(item.customComment, item.review.comment);
+  /** 要發布的意見內文：草稿優先，清空也不退回 AI 原值 */
+  const publishCommentFor = (item: PublishItem) => resolveEffectiveComment(item.customComment, item.review.comment);
 
   const openPublishModal = (items: PublishItem[]) => {
     setPublishModalConfig({
@@ -655,7 +651,7 @@ export default function App() {
     }
     if (!analysisResult || requested.length === 0 || isPublishingInProgress) return;
     // 內文是空的意見不發布（「發布已選」、單則發布與重試共用此入口）
-    const items = requested.filter((item) => hasCommentText(publishCommentFor(item)));
+    const items = filterPublishableItems(requested);
     if (items.length < requested.length) {
       setInfoMessage(`已略過 ${requested.length - items.length} 則內文是空的意見，不會發布。`);
     }
@@ -1126,7 +1122,6 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                 draftEdits={draftEdits}
                 onDraftEditsChange={setDraftEdits}
                 publishedMatches={publishedMatches}
-                blockEmptyComment={!isDemoResult}
                 analyzedAtLabel={
                   historyAvailable && analyzedAt ? formatHistoryTime(analyzedAt) : undefined
                 }
