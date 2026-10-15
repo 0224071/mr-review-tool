@@ -11,6 +11,7 @@ const render = (settings: AppSettings) =>
       onDiffChange={() => {}}
       parsedDiff={{ files: [], totalAdditions: 0, totalDeletions: 0, fileCount: 0 }}
       onAnalyze={() => {}}
+      onReanalyze={() => {}}
       onLoadSampleDiff={() => {}}
       onLoadSampleAnalysis={() => {}}
       isLoading={false}

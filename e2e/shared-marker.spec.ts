@@ -113,7 +113,7 @@ test.describe('有效的隱藏標記', () => {
     await saveFakeSettings(page);
 
     await fetchMr(page);
-    await expect(page.getByText('由 @Reviewer Bot 於')).toBeVisible();
+    await expect(page.getByText('由 Reviewer Bot（@reviewer-bot） 於')).toBeVisible();
     await expect(page.getByText(RESULT_TITLE).first()).toBeVisible();
     await expect(page.getByText(SAMPLE_ANALYSIS_RESULT.reviews[0].comment).first()).toBeVisible();
     await expect(sharedCard(page)).toBeHidden();
@@ -174,7 +174,7 @@ test.describe('過期的隱藏標記', () => {
     expect(aiCalls).toEqual([]);
   });
 
-  test('過期卡片的「重新分析」按鈕走與「分析」相同的流程（無金鑰時開啟設定引導，不呼叫 AI）', async ({page}) => {
+  test('過期卡片的「重新分析」按鈕走與新 commit 提示列相同的流程（無金鑰時開啟設定引導，不呼叫 AI）', async ({page}) => {
     await mockSharedMr(page, {
       headSha: NEW_HEAD_SHA,
       notes: [note(sharedNoteBody({extra: {headSha: OLD_HEAD_SHA}}))],
@@ -194,7 +194,7 @@ test.describe('過期的隱藏標記', () => {
     const reanalyze = card.getByRole('button', {name: '重新分析'});
     await expect(reanalyze).toBeEnabled();
     await reanalyze.click();
-    // 與按「分析」相同：provider 未設定時顯示設定引導
+    // provider 未設定時顯示設定引導
     await expect(page.getByRole('alert', {name: '尚未設定金鑰'})).toBeVisible();
     await expect(page.getByText(RESULT_TITLE)).toHaveCount(0);
     expect(aiCalls).toEqual([]);
@@ -246,7 +246,7 @@ test.describe('發布到 MR 前的確認', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     // MR 已有分享留言：說明會覆寫該留言
-    await expect(dialog).toContainText('會覆寫 @reviewer-bot 於 2026/10/1 發布的共享報告留言，不會另外新增留言');
+    await expect(dialog).toContainText('會覆寫 Reviewer Bot @reviewer-bot 於 2026/10/1 發布的共享報告留言，不會另外新增留言');
     await expect(dialog.getByRole('button', {name: /確認共享（覆寫 1 則留言）/})).toBeVisible();
     await dialog.getByRole('button', {name: '取消'}).click();
     await expect(dialog).toBeHidden();
@@ -254,7 +254,7 @@ test.describe('發布到 MR 前的確認', () => {
     expect(blockedRequests).toEqual([]);
   });
 
-  test('覆寫確認視窗有「查看原留言」連結（新分頁開啟）與該留言發布日期', async ({page, blockedRequests}) => {
+  test('覆寫確認視窗有「查看原留言」連結（新分頁開啟），黃框不另寫「發布於」', async ({page, blockedRequests}) => {
     await openLoadedResult(page);
     await page.getByRole('button', {name: '發布至 MR ▾'}).click();
     await page.getByRole('button', {name: /共享分析（免 Key 共享）/}).first().click();
@@ -265,7 +265,7 @@ test.describe('發布到 MR 前的確認', () => {
     await expect(link).toHaveAttribute('href', `${MR_URL}#note_501`);
     await expect(link).toHaveAttribute('target', '_blank');
     await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
-    await expect(dialog).toContainText('發布於 2026/10/1');
+    await expect(dialog).not.toContainText('發布於');
     await dialog.getByRole('button', {name: '取消'}).click();
     await expect(dialog).toBeHidden();
     expect(blockedRequests).toEqual([]);

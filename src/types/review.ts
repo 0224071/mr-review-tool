@@ -10,7 +10,9 @@ export type ReviewCategory =
   | 'readability'
   | 'style'
   | 'test'
-  | 'config';
+  | 'config'
+  /** 預設分類：共享標記等外部來源帶了不認得的 category 時改用（AI 回應的 schema 不含此值） */
+  | 'other';
 
 export type ReviewSeverity = 'high' | 'medium' | 'low';
 

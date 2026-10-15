@@ -45,6 +45,12 @@ export interface GitLabCreateDiscussionPayload {
   position?: GitLabDiscussionPosition;
 }
 
+/** 留言等的作者：name 為顯示名稱，username 為 GitLab 帳號（畫面上以 @username 標示） */
+export interface GitLabAuthor {
+  name: string;
+  username: string;
+}
+
 export interface GitLabNote {
   id: number;
   body: string;

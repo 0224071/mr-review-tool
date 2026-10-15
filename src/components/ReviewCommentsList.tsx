@@ -23,6 +23,7 @@ import {
   ChevronDown,
   ChevronUp,
   ExternalLink,
+  Tag,
 } from 'lucide-react';
 import { checkReviewComment } from '../core/writing-linter';
 import {
@@ -85,7 +86,12 @@ const CATEGORY_META: Record<
   style: { label: '樣式規範', icon: Palette },
   test: { label: '測試覆蓋', icon: FlaskConical },
   config: { label: '設定與依賴', icon: SlidersHorizontal },
+  other: { label: '其他', icon: Tag },
 };
+
+/** 查不到的分類（例如歷史紀錄裡舊資料的未知 category）一律用「其他」的圖示與名稱，避免整頁白掉 */
+const categoryMeta = (category: ReviewCategory) =>
+  Object.hasOwn(CATEGORY_META, category) ? CATEGORY_META[category] : CATEGORY_META.other;
 
 const SEVERITY_META: Record<
   ReviewSeverity,
@@ -110,6 +116,10 @@ const SEVERITY_META: Record<
     weight: 3,
   },
 };
+
+/** 查不到的嚴重程度用「中等」的樣式 */
+const severityMeta = (severity: ReviewSeverity) =>
+  Object.hasOwn(SEVERITY_META, severity) ? SEVERITY_META[severity] : SEVERITY_META.medium;
 
 /** 畫面上檔名後顯示的行號（修正後的 line）；勾選框的 aria-label 也用這個，讀到的和看到的一致 */
 export const displayLineText = (review: Pick<MRReviewItem, 'line' | 'lineVerified'>): string =>
@@ -324,8 +334,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
     const comment = resolveEffectiveComment(draftEdits[index]?.comment, review.comment);
     const suggestion = resolveEffectiveSuggestion(draftEdits[index]?.suggestion, review.suggestion);
     const formatted = formatReviewForCopy(
-      SEVERITY_META[review.severity].label,
-      CATEGORY_META[review.category].label,
+      severityMeta(review.severity).label,
+      categoryMeta(review.category).label,
       comment,
       suggestion
     );
@@ -403,8 +413,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
           </div>
         ) : (
           filteredAndSortedReviews.map(({ review, originalIndex }) => {
-            const catMeta = CATEGORY_META[review.category];
-            const sevMeta = SEVERITY_META[review.severity];
+            const catMeta = categoryMeta(review.category);
+            const sevMeta = severityMeta(review.severity);
             const CatIcon = catMeta.icon;
             const violations = checkReviewComment(review);
             const group = groupLookup.get(review.groupId);

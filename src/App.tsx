@@ -149,6 +149,7 @@ export default function App({ services }: { services: AppServices }) {
               onDiffChange={analysis.setRawDiff}
               parsedDiff={analysis.parsedDiff}
               onAnalyze={analysis.handleAnalyze}
+              onReanalyze={analysis.handleReanalyze}
               onLoadSampleDiff={analysis.handleLoadSampleDiff}
               onLoadSampleAnalysis={analysis.handleLoadSampleAnalysis}
               isLoading={analysis.isLoading}

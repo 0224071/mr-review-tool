@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import { DraftEdits } from '../core/history-store';
 import { createPublishedRecord, findPublishedMatches, partitionDuplicates } from '../core/publish-dedup';
 import { MRReviewItem } from '../types/review';
+import type { GitLabAuthor } from '../types/gitlab';
 import { findExistingOverallNote, SUMMARY_TAG } from '../services/gitlab-api';
 import { PublishTarget } from '../services/review-publisher';
 import { filterPublishableItems, resolveEffectiveComment, resolveEffectiveSuggestion } from '../core/review-text';
@@ -27,8 +28,8 @@ export interface ShareConfirmState {
   targetNoteId: number | null;
   /** 覆寫的是既有分享報告或整體摘要留言；null 表示新增 */
   overwrite: 'shared' | 'summary' | null;
-  /** 被覆寫留言的作者 handle（GitLab username） */
-  overwriteAuthor?: string;
+  /** 被覆寫留言的作者（顯示名稱與 GitLab username） */
+  overwriteAuthor?: GitLabAuthor;
   /** 被覆寫留言的發布時間（ISO 字串） */
   overwriteCreatedAt?: string;
   /** 被覆寫留言的網址（MR 網址 + #note_<id>） */
@@ -388,7 +389,9 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         target,
         targetNoteId: overwriteNote ? overwriteNote.id : null,
         overwrite: sharedNote ? 'shared' : summaryNote ? 'summary' : null,
-        overwriteAuthor: overwriteNote ? overwriteNote.author.username || overwriteNote.author.name : undefined,
+        overwriteAuthor: overwriteNote
+          ? { name: overwriteNote.author.name ?? '', username: overwriteNote.author.username ?? '' }
+          : undefined,
         overwriteCreatedAt: overwriteNote?.created_at,
         overwriteNoteUrl: overwriteNote ? buildNoteUrl(mrUrl, overwriteNote.id) : undefined,
       });
