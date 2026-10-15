@@ -280,19 +280,15 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
     setSelectedIndices(next);
   };
 
-  const handleSelectAllFiltered = () => {
-    // By default, only select verified lines (lineVerified !== false)
-    const verifiedFiltered = filteredAndSortedReviews.filter(
-      (item) => item.review.lineVerified !== false
-    );
-    const targetItems = (verifiedFiltered.length > 0 ? verifiedFiltered : filteredAndSortedReviews).filter(
-      (item) => !isCommentEmpty(item.originalIndex)
-    );
-    const targetIndices = targetItems.map((item) => item.originalIndex);
-    const allSelected = targetIndices.every((idx) => selectedIndices.has(idx));
+  /** 「全選」的對象：目前篩選下所有可發布的意見（行號未驗證、會改以一般留言發出的也算），只排除內文是空的 */
+  const selectableFiltered = filteredAndSortedReviews.filter((item) => !isCommentEmpty(item.originalIndex));
+  const allSelectableSelected =
+    selectableFiltered.length > 0 && selectableFiltered.every((item) => selectedIndices.has(item.originalIndex));
 
+  const handleSelectAllFiltered = () => {
+    const targetIndices = selectableFiltered.map((item) => item.originalIndex);
     const next = new Set(selectedIndices);
-    if (allSelected) {
+    if (allSelectableSelected) {
       targetIndices.forEach((idx) => next.delete(idx));
     } else {
       targetIndices.forEach((idx) => next.add(idx));
@@ -348,12 +344,9 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
             type="button"
             onClick={handleSelectAllFiltered}
             className="flex items-center gap-1.5 px-2 py-1 bg-surface border border-slate-200 rounded-md text-slate-700 hover:bg-slate-50 transition-colors text-xs font-medium cursor-pointer"
-            title="全選 / 取消全選已驗證行號之意見"
+            title="全選 / 取消全選可發布的意見（含行號未驗證、改以一般留言發出者；內文是空的不勾）"
           >
-            {filteredAndSortedReviews.length > 0 &&
-            filteredAndSortedReviews
-              .filter((item) => item.review.lineVerified !== false && !isCommentEmpty(item.originalIndex))
-              .every((item) => selectedIndices.has(item.originalIndex)) ? (
+            {allSelectableSelected ? (
               <CheckSquare className="w-3.5 h-3.5 text-primary" />
             ) : (
               <Square className="w-3.5 h-3.5 text-slate-400" />

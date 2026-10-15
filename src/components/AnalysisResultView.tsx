@@ -28,6 +28,7 @@ import { ReviewCommentsList } from './ReviewCommentsList';
 import { StructuralGraphView } from './StructuralGraphView';
 import { ChecklistCoverageBanner } from './ChecklistCoverageBanner';
 import { DraftEdits } from '../core/history-store';
+import { filterPublishableItems } from '../core/review-text';
 import { PublishedMatch } from '../core/publish-dedup';
 
 interface AnalysisResultViewProps {
@@ -242,16 +243,23 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
     setIsExportMenuOpen(false);
   };
 
+  // 「發布已選 N 則」：N 與發布時 filterPublishableItems 過濾後實際送出的則數一致
+  const publishableSelectedItems = filterPublishableItems(
+    Array.from(selectedIndices)
+      .filter((idx) => result.reviews[idx])
+      .map((idx) => ({
+        review: result.reviews[idx],
+        customComment: draftEdits[idx]?.comment,
+        customSuggestion: draftEdits[idx]?.suggestion,
+        index: idx,
+      }))
+  );
+  const publishableSelectedCount = publishableSelectedItems.length;
+
   // Batch publish trigger
   const handlePublishSelectedBatch = () => {
-    if (!onPublishBatchReviews || selectedIndices.size === 0) return;
-    const items = Array.from(selectedIndices).map((idx) => ({
-      review: result.reviews[idx],
-      customComment: draftEdits[idx]?.comment,
-      customSuggestion: draftEdits[idx]?.suggestion,
-      index: idx,
-    }));
-    onPublishBatchReviews(items);
+    if (!onPublishBatchReviews || publishableSelectedCount === 0) return;
+    onPublishBatchReviews(publishableSelectedItems);
   };
 
   // 上次發布失敗的項目，一次重試
@@ -717,7 +725,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
             {/* Left: Selected count & MR info */}
             <div className="flex items-center gap-2 text-xs min-w-0">
               <span className="font-semibold">
-                已選 <strong className="text-orange-400 text-sm font-bold">{selectedIndices.size}</strong> 則
+                已選 <strong className="text-orange-400 text-sm font-bold">{publishableSelectedCount}</strong> 則
               </span>
               <span className="text-slate-400">·</span>
               <span className="text-slate-300 font-mono truncate">
@@ -783,11 +791,11 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
               <button
                 type="button"
                 onClick={handlePublishSelectedBatch}
-                disabled={selectedIndices.size === 0 || isPublishing}
+                disabled={publishableSelectedCount === 0 || isPublishing}
                 className="px-4 py-2 bg-gitlab hover:bg-gitlab-hover text-white rounded-lg text-xs font-semibold shadow-xs disabled:opacity-40 transition-colors flex items-center gap-1.5 cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />
-                <span>發布已選 {selectedIndices.size} 則</span>
+                <span>發布已選 {publishableSelectedCount} 則</span>
               </button>
             </div>
           </div>

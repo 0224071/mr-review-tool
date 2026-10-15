@@ -199,6 +199,58 @@ describe('示範模式完整流程（?demo=1）', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  it('按「全選」：連行號未驗證的那則也勾到，確認視窗「行內 5 · 一般留言 1」，送出則數等於 N', async () => {
+    await mount('/?demo=1');
+    await click(findButton('分析'));
+    await waitFor(() => text().includes(SAMPLE_ANALYSIS_RESULT.title), '分析結果');
+
+    const total = SAMPLE_ANALYSIS_RESULT.reviews.length;
+    await click(findButton('全選'));
+    const checkboxes = Array.from(container.querySelectorAll('button[aria-pressed]'));
+    expect(checkboxes.every((b) => b.getAttribute('aria-pressed') === 'true')).toBe(true);
+
+    await click(findButton(`發布已選 ${total} 則`));
+    await waitFor(() => !!document.querySelector('[role="dialog"]'), '確認視窗');
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('行內 5 · 一般留言 1');
+    expect(dialog.querySelectorAll('ol > li')).toHaveLength(total);
+
+    await click(findButton('確認發送', dialog));
+    await waitFor(() => !document.querySelector('[role="dialog"]'), '發布完成');
+    expect(fakePublishBatchSpy).toHaveBeenCalledTimes(1);
+    expect(fakePublishBatchSpy.mock.calls[0][1]).toHaveLength(total);
+    expect(text()).toContain(`已發布 ${total} 則審查意見。（${DEMO_NOTICE}）`);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('內文清空的那則按「全選」也不勾，N 與假發布器收到的則數一致', async () => {
+    await mount('/?demo=1');
+    await click(findButton('分析'));
+    await waitFor(() => text().includes(SAMPLE_ANALYSIS_RESULT.title), '分析結果');
+
+    const total = SAMPLE_ANALYSIS_RESULT.reviews.length;
+    const checkboxes = Array.from(container.querySelectorAll<HTMLButtonElement>('button[aria-pressed]'));
+    const card = checkboxes[0].closest<HTMLElement>('div[tabindex="0"]')!;
+    await click(card.querySelector<HTMLButtonElement>('button[aria-label="編輯草稿"]')!);
+    const commentInput = card.querySelector('textarea')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setter.call(commentInput, '  ');
+      commentInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    await click(findButton('全選'));
+    expect(checkboxes[0].getAttribute('aria-pressed')).toBe('false');
+    expect(checkboxes.slice(1).every((b) => b.getAttribute('aria-pressed') === 'true')).toBe(true);
+
+    await click(findButton(`發布已選 ${total - 1} 則`));
+    await waitFor(() => !!document.querySelector('[role="dialog"]'), '確認視窗');
+    await click(findButton('確認發送', document.querySelector('[role="dialog"]')!));
+    await waitFor(() => !document.querySelector('[role="dialog"]'), '發布完成');
+    expect(fakePublishBatchSpy).toHaveBeenCalledTimes(1);
+    expect(fakePublishBatchSpy.mock.calls[0][1]).toHaveLength(total - 1);
+  });
+
   it('把某則意見內文清空：不能勾、不能複製或單則發布，就地提示，發布已選時假發布器收不到那則', async () => {
     await mount('/?demo=1');
     await click(findButton('分析'));
