@@ -3,6 +3,7 @@ import {
   extractBacktickSnippets,
   resolveReviewLine,
   alignReviewsWithDiff,
+  dropUnverifiedFallbackLines,
 } from './line-resolver';
 import { parseGitDiff } from './diff-parser';
 import { ParsedDiff } from '../types/diff';
@@ -122,7 +123,7 @@ describe('line-resolver', () => {
       expect(result.newLine).toBe(5);
     });
 
-    it('情境 4: 找不到 snippet 時，退回 AI 給的行號並標記為未驗證', () => {
+    it('情境 4: 找不到 snippet 時，不保留 AI 給的行號並標記為未驗證', () => {
       const review = {
         file: 'src/components/ItemList.tsx',
         line: 42,
@@ -132,7 +133,7 @@ describe('line-resolver', () => {
       };
 
       const result = resolveReviewLine(review, sampleParsedDiff);
-      expect(result.newLine).toBe(42);
+      expect(result.newLine).toBeNull();
       expect(result.oldLine).toBeNull();
       expect(result.lineVerified).toBe(false);
     });
@@ -325,6 +326,54 @@ new file mode 100644
       );
       // 行號維持在依賴陣列那行；片段太短又無法以反引號佐證 → 未驗證
       expect(result).toEqual({ newLine: 7, oldLine: null, lineVerified: false });
+    });
+  });
+
+  describe('lineVerified=false 不保留 AI 行號（playground 發布實測）', () => {
+    const diff = parseGitDiff(`diff --git a/src/components/Pagination.tsx b/src/components/Pagination.tsx
+--- a/src/components/Pagination.tsx
++++ b/src/components/Pagination.tsx
+@@ -1,3 +1,4 @@
+ export function Pagination({ page }) {
++  const next = page + 1;
+   return <nav>{page}</nav>;
+ }
+`);
+    const base: MRReviewItem = {
+      groupId: 'g',
+      category: 'bug',
+      severity: 'low',
+      file: 'src/components/Pagination.tsx',
+      line: 999,
+      codeSnippet: 'zz_not_in_diff_qq',
+      comment: '案例2 行號未驗證，應以一般留言發出。',
+      suggestion: '請修正',
+    };
+
+    it('snippet 不在 diff 中：line/newLine/oldLine 皆為 null', () => {
+      const [aligned] = alignReviewsWithDiff([base], diff);
+      expect(aligned).toMatchObject({ line: null, newLine: null, oldLine: null, lineVerified: false });
+    });
+
+    it('檔案不在 diff 中：同樣不保留 AI 行號', () => {
+      const [aligned] = alignReviewsWithDiff([{ ...base, file: 'src/other.ts' }], diff);
+      expect(aligned.line).toBeNull();
+      expect(aligned.lineVerified).toBe(false);
+    });
+
+    it('候選行在 diff 中但未驗證時，保留 diff 中的行號', () => {
+      const [aligned] = alignReviewsWithDiff([{ ...base, line: 2, codeSnippet: '}' }], diff);
+      expect(aligned).toMatchObject({ line: 4, newLine: 4, oldLine: 3, lineVerified: false });
+    });
+
+    it('dropUnverifiedFallbackLines：清掉舊快取中不在 diff 的未驗證行號，其餘不動', () => {
+      const stale = { ...base, newLine: 999, oldLine: null, lineVerified: false };
+      const inDiff = { ...base, line: 2, newLine: 2, oldLine: null, lineVerified: false };
+      const verified = { ...base, line: 999, newLine: 999, lineVerified: true };
+      const [a, b, c] = dropUnverifiedFallbackLines([stale, inDiff, verified], diff);
+      expect(a).toMatchObject({ line: null, newLine: null, oldLine: null });
+      expect(b).toBe(inDiff);
+      expect(c).toBe(verified);
     });
   });
 });

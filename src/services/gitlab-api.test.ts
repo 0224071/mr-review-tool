@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchGitLabMrNotes } from './gitlab-api';
+import {
+  createGitLabDiscussion,
+  createGitLabGeneralDiscussion,
+  fetchGitLabMrNotes,
+  GitLabApiError,
+} from './gitlab-api';
 import { GitLabNote } from '../types/gitlab';
 
 const note = (id: number): GitLabNote => ({
@@ -92,5 +97,26 @@ describe('fetchGitLabMrNotes', () => {
     vi.stubGlobal('fetch', fetchMock);
     expect(await fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).toHaveLength(100);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createGitLabDiscussion / createGitLabGeneralDiscussion', () => {
+  it('一般留言 POST /discussions、只帶 body，回傳 discussion id', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ id: 'abc123', notes: [{ id: 55 }] }, {}, 201));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await createGitLabGeneralDiscussion('https://gitlab.com/', 't', 'a/b', 3, 'hello');
+    expect(res).toEqual({ id: 'abc123' });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new URL(url).pathname).toBe('/api/v4/projects/a%2Fb/merge_requests/3/discussions');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ body: 'hello' });
+  });
+
+  it('失敗時拋出帶 status 的 GitLabApiError', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ message: 'line_code invalid' }, {}, 400)));
+    const err = await createGitLabDiscussion('https://gitlab.com', 't', 'a/b', 3, { body: 'x' }).catch((e) => e);
+    expect(err).toBeInstanceOf(GitLabApiError);
+    expect(err.status).toBe(400);
+    expect(err.message).toContain('line_code invalid');
   });
 });

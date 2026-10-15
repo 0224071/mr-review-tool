@@ -89,6 +89,34 @@ describe('findPublishedMatches', () => {
   });
 });
 
+describe('發布紀錄格式一致（一般留言改走 /discussions）', () => {
+  it('舊紀錄（note id 數字）與新紀錄（discussion id 字串）都能去重', () => {
+    const a = review();
+    const b = review({ file: 'src/b.ts', comment: '另一則一般留言的審查意見內容' });
+    const legacy = createPublishedRecord(a, a.comment, a.suggestion, 12345, NOW);
+    const current = createPublishedRecord(b, b.comment, b.suggestion, 'f3a9c0d1e2b4', NOW + 1);
+    expect(current.discussionId).toBe('f3a9c0d1e2b4');
+    expect(findPublishedMatches([a, b], {}, [legacy, current], [])).toEqual({
+      0: { source: 'local', publishedAt: NOW },
+      1: { source: 'local', publishedAt: NOW + 1 },
+    });
+  });
+
+  it('沒有 discussionId 的舊紀錄仍以內容比對', () => {
+    const r = review();
+    const { discussionId: _omit, ...legacy } = createPublishedRecord(r, r.comment, r.suggestion, 1, NOW);
+    expect(findPublishedMatches([r], {}, [legacy], [])[0]?.source).toBe('local');
+  });
+
+  it('MR 上「版本已更新」與「行號未驗證」（無行號）的一般留言都辨識為已發布', () => {
+    const r = review();
+    const stale = note({ body: `src/cart.ts:10（版本已更新）\n\n**[HIGH] BUG**: ${r.comment}`, position: null });
+    const noLine = note({ body: `src/cart.ts（行號未驗證）\n\n**[HIGH] BUG**: ${r.comment}`, position: null });
+    expect(findPublishedMatches([r], {}, [], [stale])[0]?.source).toBe('remote');
+    expect(findPublishedMatches([r], {}, [], [noLine])[0]?.source).toBe('remote');
+  });
+});
+
 describe('defaultSelectedIndices', () => {
   it('預設勾選：行號已驗證且未發布', () => {
     const reviews = [review(), review({ lineVerified: false }), review({ comment: '另一則尚未發布的意見內容' })];

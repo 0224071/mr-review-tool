@@ -44,6 +44,16 @@ export function parseGitLabMrUrl(url: string, defaultBaseUrl: string = 'https://
   throw new Error('無法解析 GitLab MR 網址，請確認格式為：https://gitlab.com/<group>/<project>/-/merge_requests/<iid>');
 }
 
+/** GitLab API 回應非 2xx 時拋出，保留 HTTP status 供呼叫端判斷（例如行內留言失敗時改發一般留言） */
+export class GitLabApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'GitLabApiError';
+    this.status = status;
+  }
+}
+
 /**
  * Builds standard GitLab headers
  */
@@ -241,6 +251,7 @@ export function findSharedAnalysisInNotes(notes: GitLabNote[]): { result: MRAnal
 /**
  * Creates a Discussion with line position or general comment on GitLab MR
  * POST /projects/:id/merge_requests/:iid/discussions
+ * 回傳的 id 為 discussion id（字串）；不帶 position 時即為 MR 一般留言。
  */
 export async function createGitLabDiscussion(
   baseUrl: string,
@@ -272,11 +283,24 @@ export async function createGitLabDiscussion(
     } catch {
       // ignore
     }
-    throw new Error(`發布 Discussion 失敗 (${res.status})：${errorMsg}`);
+    throw new GitLabApiError(`發布 Discussion 失敗 (${res.status})：${errorMsg}`, res.status);
   }
 
   const data = await res.json();
   return { id: data.id };
+}
+
+/**
+ * 以 /discussions（不帶 position）發一般留言，和行內留言一樣回傳 discussion id，發布紀錄格式一致
+ */
+export async function createGitLabGeneralDiscussion(
+  baseUrl: string,
+  token: string,
+  projectPath: string,
+  mrIid: number,
+  body: string
+): Promise<{ id: string | number }> {
+  return createGitLabDiscussion(baseUrl, token, projectPath, mrIid, { body });
 }
 
 /**

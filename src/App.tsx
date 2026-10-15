@@ -27,7 +27,7 @@ import {
 } from './core/publish-dedup';
 import { buildAnalysisRecord, shouldServeFromCache } from './core/analysis-record';
 import { enrichGroupsWithParsedDiff, parseGitDiff } from './core/diff-parser';
-import { alignReviewsWithDiff } from './core/line-resolver';
+import { alignReviewsWithDiff, dropUnverifiedFallbackLines } from './core/line-resolver';
 import { analyzeGitDiffWithGemini } from './services/gemini-service';
 import { SAMPLE_GIT_DIFF } from './services/diff-sources/sample-diffs';
 import { SAMPLE_ANALYSIS_RESULT } from './services/diff-sources/sample-analysis';
@@ -36,13 +36,11 @@ import { MRAnalysisResult, MRReviewItem } from './types/review';
 import { DiffFile } from './types/diff';
 import {
   GitLabDiffRefs,
-  GitLabDiscussionPosition,
   GitLabMergeRequestInfo,
   GitLabNote,
   ReviewPublishState,
 } from './types/gitlab';
 import {
-  createGitLabDiscussion,
   createGitLabNote,
   fetchGitLabMergeRequest,
   fetchGitLabMrNotes,
@@ -54,6 +52,7 @@ import {
   SUMMARY_TAG,
   updateGitLabNote,
 } from './services/gitlab-api';
+import { publishReviewItem } from './services/review-publisher';
 import { AlertCircle, DatabaseZap, Info, Sparkles } from 'lucide-react';
 
 const SETTINGS_STORAGE_KEY = 'gitlab_mr_reviewer_settings';
@@ -240,7 +239,11 @@ export default function App() {
 
   /** 把一筆歷史紀錄套用到畫面（不呼叫 Gemini） */
   const applyRecord = (record: HistoryRecord) => {
-    setAnalysisResult(record.result);
+    setAnalysisResult(
+      record.rawDiff
+        ? { ...record.result, reviews: dropUnverifiedFallbackLines(record.result.reviews, parseGitDiff(record.rawDiff)) }
+        : record.result
+    );
     setCurrentRecordId(record.id);
     setAnalyzedAt(record.analyzedAt);
     setResultRawDiff(record.rawDiff);
@@ -783,86 +786,28 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
           const suggestionText = item.customSuggestion || item.review.suggestion;
 
           try {
-            if (item.review.lineVerified === false) {
-              // lineVerified === false 的意見不可帶 position，一律以 MR 一般留言發出，開頭加上「檔案:行號（行號未驗證）」
-              const lineDisplay = item.review.line !== null ? item.review.line : '未知';
-              const generalNoteBody = `${item.review.file}:${lineDisplay}（行號未驗證）\n\n**[${item.review.severity.toUpperCase()}] ${item.review.category.toUpperCase()}**: ${commentText}\n\n> 💡 **修改建議**：\n> ${suggestionText}\n\n*— 來自 GitLab MR 審查工具*`;
+            const res = await publishReviewItem(
+              {
+                baseUrl: parsedUrl.baseUrl,
+                token: settings.gitlabToken,
+                projectPath: parsedUrl.projectPath,
+                mrIid: parsedUrl.mrIid,
+              },
+              item.review,
+              commentText,
+              suggestionText,
+              diffRefs
+            );
 
-              const res = await createGitLabNote(
-                parsedUrl.baseUrl,
-                settings.gitlabToken,
-                parsedUrl.projectPath,
-                parsedUrl.mrIid,
-                generalNoteBody
-              );
-
-              setPublishStates((prev) => ({
-                ...prev,
-                [item.index]: {
-                  status: 'published',
-                  discussionId: res.id,
-                },
-              }));
-              markPublished(item, commentText, suggestionText, res.id);
-            } else {
-              const discussionBody = `**[${item.review.severity.toUpperCase()}] ${item.review.category.toUpperCase()}**: ${commentText}\n\n> 💡 **修改建議**：\n> ${suggestionText}\n\n*— 來自 GitLab MR 審查工具*`;
-
-              const payload: {
-                body: string;
-                position?: GitLabDiscussionPosition;
-              } = {
-                body: discussionBody,
-              };
-
-              // 送出 inline comment 時，position 依對齊結果帶入：
-              // 新增行只帶 new_line；刪除行只帶 old_line；未變更行同時帶 new_line 與 old_line。
-              if (diffRefs && (item.review.newLine != null || item.review.oldLine != null || item.review.line !== null)) {
-                const pos: GitLabDiscussionPosition = {
-                  base_sha: diffRefs.base_sha,
-                  start_sha: diffRefs.start_sha,
-                  head_sha: diffRefs.head_sha,
-                  position_type: 'text',
-                  new_path: item.review.file,
-                  old_path: item.review.file,
-                };
-
-                if (item.review.newLine != null && item.review.oldLine != null) {
-                  // 未變更行 (context)：同時帶 new_line 與 old_line
-                  pos.new_line = item.review.newLine;
-                  pos.old_line = item.review.oldLine;
-                  payload.position = pos;
-                } else if (item.review.newLine != null) {
-                  // 新增行：只帶 new_line
-                  pos.new_line = item.review.newLine;
-                  payload.position = pos;
-                } else if (item.review.oldLine != null) {
-                  // 刪除行：只帶 old_line
-                  pos.old_line = item.review.oldLine;
-                  payload.position = pos;
-                } else if (item.review.line !== null) {
-                  // 退回使用 AI 給的 line
-                  pos.new_line = item.review.line;
-                  payload.position = pos;
-                }
-              }
-
-              const res = await createGitLabDiscussion(
-                parsedUrl.baseUrl,
-                settings.gitlabToken,
-                parsedUrl.projectPath,
-                parsedUrl.mrIid,
-                payload
-              );
-
-              setPublishStates((prev) => ({
-                ...prev,
-                [item.index]: {
-                  status: 'published',
-                  discussionId: res.id,
-                },
-              }));
-              markPublished(item, commentText, suggestionText, res.id);
-            }
+            setPublishStates((prev) => ({
+              ...prev,
+              [item.index]: {
+                status: 'published',
+                discussionId: res.discussionId,
+                fallbackReason: res.fallbackReason,
+              },
+            }));
+            markPublished(item, commentText, suggestionText, res.discussionId);
           } catch (itemErr: unknown) {
             const errDetail = itemErr instanceof Error ? itemErr.message : String(itemErr);
             setPublishStates((prev) => ({

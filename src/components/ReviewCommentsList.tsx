@@ -455,8 +455,10 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     >
                       <FileCode className="w-3 h-3 text-slate-500" />
                       <span className="font-semibold text-slate-800">{review.file}</span>
-                      {review.line !== null && (
+                      {review.line !== null ? (
                         <span className="text-primary font-bold">:L{review.line}</span>
+                      ) : review.lineVerified === false && (
+                        <span className="text-amber-700 font-bold">:行號未驗證</span>
                       )}
                       {expandedCodeIndices.has(originalIndex) ? (
                         <ChevronUp className="w-3 h-3 text-slate-400" />
@@ -631,8 +633,10 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                         <span className="font-semibold flex items-center gap-1.5">
                           <FileCode className="w-3.5 h-3.5 text-slate-400" />
                           <span>{review.file}</span>
-                          {review.line !== null && (
+                          {review.line !== null ? (
                             <span className="text-amber-400 font-bold">:L{review.line}</span>
+                          ) : review.lineVerified === false && (
+                            <span className="text-amber-400 font-bold">:行號未驗證</span>
                           )}
                         </span>
                         <span className="text-slate-400 text-[10px]">問題行前後各 5 行變更</span>
@@ -743,6 +747,16 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                   {isPublished && publishedMatch && publishedMatch.publishedAt > 0 && (
                     <span className="text-muted">
                       發布於 {formatHistoryTime(publishedMatch.publishedAt)}
+                    </span>
+                  )}
+
+                  {pubState?.status === 'published' && pubState.fallbackReason && (
+                    <span
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium bg-amber-50 text-amber-800 border border-amber-200"
+                      title={pubState.fallbackReason}
+                    >
+                      <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                      <span>{pubState.fallbackReason}</span>
                     </span>
                   )}
 

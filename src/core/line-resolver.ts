@@ -61,7 +61,8 @@ export function extractBacktickSnippets(comment?: string, suggestion?: string): 
  *    - If codeSnippet (without spaces) < 8 characters or appears multiple times in the file diff,
  *      and did not pass backticked snippet verification, mark lineVerified = false.
  * 6. Fallback:
- *    - If codeSnippet cannot be found anywhere in the file diff, fallback to review.line with lineVerified = false.
+ *    - If codeSnippet cannot be found anywhere in the file diff, return null lines with lineVerified = false.
+ *      AI 給的行號（例如 999）未經驗證，不保留，以免被當成可信行號顯示或發布。
  */
 export function resolveReviewLine(
   review: {
@@ -73,6 +74,7 @@ export function resolveReviewLine(
   },
   parsedDiff: ParsedDiff
 ): ResolvedLineResult {
+  // AI 給的行號只用來在多個候選中挑最近的一行
   const fallbackLine = review.line ?? null;
   const targetSnippet = (review.codeSnippet || '').trim();
 
@@ -89,7 +91,7 @@ export function resolveReviewLine(
 
   if (!matchedFile || !targetSnippet) {
     return {
-      newLine: fallbackLine,
+      newLine: null,
       oldLine: null,
       lineVerified: false,
     };
@@ -177,7 +179,7 @@ export function resolveReviewLine(
   // If not found in any hunk lines, fallback to review.line with unverified
   if (candidateIndex === -1) {
     return {
-      newLine: fallbackLine,
+      newLine: null,
       oldLine: null,
       lineVerified: false,
     };
@@ -301,10 +303,37 @@ export function alignReviewsWithDiff(
     const resolved = resolveReviewLine(review, parsedDiff);
     return {
       ...review,
-      line: resolved.newLine ?? resolved.oldLine ?? review.line,
+      // 未驗證時不退回 AI 給的行號
+      line: resolved.newLine ?? resolved.oldLine ?? (resolved.lineVerified ? review.line : null),
       newLine: resolved.newLine,
       oldLine: resolved.oldLine,
       lineVerified: resolved.lineVerified,
     };
+  });
+}
+
+/**
+ * 舊快取紀錄中，未驗證意見可能仍帶著 AI 給的行號（例如 999）。
+ * 行號不在該檔案 diff 中的未驗證意見，把行號清空。
+ */
+export function dropUnverifiedFallbackLines(reviews: MRReviewItem[], parsedDiff: ParsedDiff): MRReviewItem[] {
+  return reviews.map((review) => {
+    if (review.lineVerified !== false || review.line == null) return review;
+    const fileNorm = normalizeFilePath(review.file);
+    const file = parsedDiff.files.find(
+      (f) => normalizeFilePath(f.newPath) === fileNorm || normalizeFilePath(f.oldPath) === fileNorm
+    );
+    const inDiff =
+      !!file &&
+      file.hunks.some((h) =>
+        h.lines.some(
+          (l) =>
+            (review.newLine != null && l.newLineNumber === review.newLine) ||
+            (review.oldLine != null && l.oldLineNumber === review.oldLine) ||
+            (review.newLine == null && review.oldLine == null &&
+              (l.newLineNumber === review.line || l.oldLineNumber === review.line))
+        )
+      );
+    return inDiff ? review : { ...review, line: null, newLine: null, oldLine: null };
   });
 }
