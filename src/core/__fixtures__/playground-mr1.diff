@@ -1,0 +1,323 @@
+diff --git a/src/api/client.ts b/src/api/client.ts
+--- a/src/api/client.ts
++++ b/src/api/client.ts
+@@ -16,3 +16,11 @@ export async function fetchUsers(signal?: AbortSignal): Promise<User[]> {
+     avatarUrl: `https://i.pravatar.cc/80?u=${u.id}`,
+   }));
+ }
++
++export async function saveFavorites(ids: number[]): Promise<void> {
++  await fetch(`${BASE_URL}/posts`, {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ favorites: ids }),
++  });
++}
+
+diff --git a/src/components/CompanyFilter.tsx b/src/components/CompanyFilter.tsx
+new file mode 100644
+--- /dev/null
++++ b/src/components/CompanyFilter.tsx
+@@ -0,0 +1,28 @@
++import { useEffect, useState } from 'react';
++import type { User } from '../types';
++
++interface Props {
++  users: User[];
++  value: string;
++  onChange: (value: string) => void;
++}
++
++export function CompanyFilter({ users, value, onChange }: Props) {
++  const [options, setOptions] = useState<string[]>([]);
++
++  useEffect(() => {
++    const list = Array.from(new Set(users.map((u) => u.company))).sort();
++    setOptions(list);
++  }, []);
++
++  return (
++    <select value={value} onChange={(e) => onChange(e.target.value)} aria-label="依公司篩選">
++      <option value="all">全部公司</option>
++      {options.map((c, i) => (
++        <option key={i} value={c}>
++          {c}
++        </option>
++      ))}
++    </select>
++  );
++}
+
+diff --git a/src/components/Pagination.tsx b/src/components/Pagination.tsx
+new file mode 100644
+--- /dev/null
++++ b/src/components/Pagination.tsx
+@@ -0,0 +1,23 @@
++interface Props {
++  page: number;
++  totalPages: number;
++  onPrev: () => void;
++  onNext: () => void;
++}
++
++export function Pagination({ page, totalPages, onPrev, onNext }: Props) {
++  if (totalPages <= 1) return null;
++  return (
++    <nav className="pagination" aria-label="分頁">
++      <button onClick={onPrev} disabled={page === 1}>
++        上一頁
++      </button>
++      <span>
++        {page} / {totalPages}
++      </span>
++      <button onClick={onNext} disabled={page === totalPages}>
++        下一頁
++      </button>
++    </nav>
++  );
++}
+
+diff --git a/src/components/UserList.tsx b/src/components/UserList.tsx
+--- a/src/components/UserList.tsx
++++ b/src/components/UserList.tsx
+@@ -2,21 +2,30 @@ import type { User } from '../types';
+ 
+ interface Props {
+   users: User[];
++  favorites: number[];
++  onToggleFavorite: (id: number) => void;
+ }
+ 
+-export function UserList({ users }: Props) {
++export function UserList({ users, favorites, onToggleFavorite }: Props) {
+   if (users.length === 0) {
+     return <p className="empty">沒有符合的使用者</p>;
+   }
+   return (
+     <ul className="user-list">
+-      {users.map((user) => (
+-        <li key={user.id} className="user-item">
+-          <img src={user.avatarUrl} alt={user.name} width={40} height={40} />
+-          <div>
++      {users.map((user, index) => (
++        <li key={index} className="user-item">
++          <img src={user.avatarUrl} width={40} height={40} />
++          <div className="user-info">
+             <strong>{user.name}</strong>
+             <span>{user.email}</span>
+           </div>
++          <div
++            className="favorite"
++            style={{ color: favorites.includes(user.id) ? '#f5a623' : '#cccccc' }}
++            onClick={() => onToggleFavorite(user.id)}
++          >
++            ★
++          </div>
+         </li>
+       ))}
+     </ul>
+
+diff --git a/src/hooks/useFavorites.ts b/src/hooks/useFavorites.ts
+new file mode 100644
+--- /dev/null
++++ b/src/hooks/useFavorites.ts
+@@ -0,0 +1,26 @@
++import { useCallback, useEffect, useState } from 'react';
++import { saveFavorites } from '../api/client';
++
++const STORAGE_KEY = 'favorites';
++
++export function useFavorites() {
++  const [favorites, setFavorites] = useState<number[]>(() => {
++    const raw = localStorage.getItem(STORAGE_KEY);
++    return raw ? JSON.parse(raw) : [];
++  });
++
++  useEffect(() => {
++    localStorage.setItem(STORAGE_KEY, JSON.stringify(favorites));
++    saveFavorites(favorites);
++  }, [favorites]);
++
++  const toggleFavorite = useCallback((id: number) => {
++    if (favorites.includes(id)) {
++      setFavorites(favorites.filter((f) => f !== id));
++    } else {
++      setFavorites([...favorites, id]);
++    }
++  }, []);
++
++  return { favorites, toggleFavorite };
++}
+
+diff --git a/src/hooks/usePagination.test.ts b/src/hooks/usePagination.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/hooks/usePagination.test.ts
+@@ -0,0 +1,18 @@
++import { describe, expect, it } from 'vitest';
++import { renderHook, act } from '@testing-library/react';
++import { usePagination } from './usePagination';
++
++describe('usePagination', () => {
++  const items = Array.from({ length: 12 }, (_, i) => i + 1);
++
++  it('計算總頁數', () => {
++    const { result } = renderHook(() => usePagination(items, 5));
++    expect(result.current.totalPages).toBe(3);
++  });
++
++  it('可以切換到下一頁', () => {
++    const { result } = renderHook(() => usePagination(items, 5));
++    act(() => result.current.next());
++    expect(result.current.page).toBe(2);
++  });
++});
+
+diff --git a/src/hooks/usePagination.ts b/src/hooks/usePagination.ts
+new file mode 100644
+--- /dev/null
++++ b/src/hooks/usePagination.ts
+@@ -0,0 +1,21 @@
++import { useEffect, useState } from 'react';
++
++export function usePagination<T>(items: T[], pageSize: number) {
++  const [page, setPage] = useState(1);
++  const totalPages = Math.ceil(items.length / pageSize);
++
++  useEffect(() => {
++    setPage(1);
++  }, [items.length]);
++
++  const start = page * pageSize;
++  const pageItems = items.slice(start, start + pageSize);
++
++  return {
++    page,
++    totalPages,
++    pageItems,
++    next: () => setPage((p) => Math.min(p + 1, totalPages)),
++    prev: () => setPage((p) => Math.max(p - 1, 1)),
++  };
++}
+
+diff --git a/src/App.tsx b/src/App.tsx
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,24 +1,49 @@
+ import { useState } from 'react';
+ import { SearchBar } from './components/SearchBar';
+ import { UserList } from './components/UserList';
++import { CompanyFilter } from './components/CompanyFilter';
++import { Pagination } from './components/Pagination';
+ import { useUsers } from './hooks/useUsers';
++import { useFavorites } from './hooks/useFavorites';
++import { usePagination } from './hooks/usePagination';
++
++const PAGE_SIZE = 5;
+ 
+ export default function App() {
+   const { users, loading, error } = useUsers();
++  const { favorites, toggleFavorite } = useFavorites();
+   const [query, setQuery] = useState('');
++  const [company, setCompany] = useState('all');
++  const [onlyFav, setOnlyFav] = useState(false);
+ 
+   const keyword = query.trim().toLowerCase();
+-  const visible = users.filter(
+-    (u) => u.name.toLowerCase().includes(keyword) || u.email.toLowerCase().includes(keyword),
+-  );
++  const data2 = users
++    .filter((u) => u.name.toLowerCase().includes(keyword) || u.email.toLowerCase().includes(keyword))
++    .filter((u) => company === 'all' || u.company === company)
++    .filter((u) => !onlyFav || favorites.includes(u.id))
++    .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
++
++  const { page, totalPages, pageItems, next, prev } = usePagination(data2, PAGE_SIZE);
+ 
+   return (
+     <main className="container">
+       <h1>使用者名單</h1>
+-      <SearchBar value={query} onChange={setQuery} />
++      <div className="toolbar">
++        <SearchBar value={query} onChange={setQuery} />
++        <CompanyFilter users={users} value={company} onChange={setCompany} />
++        <label>
++          <input type="checkbox" checked={onlyFav} onChange={(e) => setOnlyFav(e.target.checked)} />
++          只看收藏
++        </label>
++      </div>
+       {loading && <p>載入中…</p>}
+       {error && <p role="alert">{error}</p>}
+-      {!loading && !error && <UserList users={visible} />}
++      {!loading && !error && (
++        <>
++          <UserList users={pageItems} favorites={favorites} onToggleFavorite={toggleFavorite} />
++          <Pagination page={page} totalPages={totalPages} onPrev={prev} onNext={next} />
++        </>
++      )}
+     </main>
+   );
+ }
+
+diff --git a/src/index.css b/src/index.css
+--- a/src/index.css
++++ b/src/index.css
+@@ -16,3 +16,9 @@
+ .user-item span { display: block; color: var(--color-muted); font-size: 14px; }
+ .empty { color: var(--color-muted); }
+ .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
++
++.toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
++.toolbar .search { flex: 1; }
++.user-info { flex: 1; }
++.favorite { cursor: pointer; font-size: 20px; }
++.pagination { display: flex; gap: 12px; justify-content: center; align-items: center; margin-top: 16px; }
+
+diff --git a/src/types.ts b/src/types.ts
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -5,3 +5,5 @@ export interface User {
+   company: string;
+   avatarUrl: string;
+ }
++
++export type CompanyFilter = 'all' | string;
+
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -6,3 +6,16 @@
+ npm install
+ npm run dev
+ ```
++
++## 功能
++
++- 依姓名或 Email 搜尋
++- 依公司篩選
++- 收藏使用者（存在 localStorage）
++- 分頁，每頁 5 筆
++
++## 測試
++
++```bash
++npm test
++```
+
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -14,11 +14,13 @@
+     "react-dom": "^18.3.1"
+   },
+   "devDependencies": {
++    "@testing-library/react": "^16.0.0",
+     "@types/react": "^18.3.3",
+     "@types/react-dom": "^18.3.0",
+     "@vitejs/plugin-react": "^4.3.1",
+     "typescript": "^5.5.4",
+     "vite": "^5.4.0",
++    "jsdom": "^25.0.0",
+     "vitest": "^2.0.5"
+   }
+ }

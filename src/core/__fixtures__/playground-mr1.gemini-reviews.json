@@ -1,0 +1,44 @@
+[
+  {
+    "file": "src/components/CompanyFilter.tsx",
+    "line": 13,
+    "codeSnippet": "  useEffect(() => {",
+    "comment": "`useEffect` 依賴陣列為空，當傳入的 `users` 變更時不會重新計算選項清單。",
+    "suggestion": "將 `users` 加入依賴陣列，或直接使用 `useMemo(() => Array.from(...), [users])` 計算。"
+  },
+  {
+    "file": "src/components/CompanyFilter.tsx",
+    "line": 22,
+    "codeSnippet": "        <option key={i} value={c}>",
+    "comment": "使用陣列索引 `i` 作為 `key`，在選項排序或增刪時會導致渲染問題。",
+    "suggestion": "改用具唯一性的公司名稱字串 `key={c}` 作為標識。"
+  },
+  {
+    "file": "src/hooks/useFavorites.ts",
+    "line": 9,
+    "codeSnippet": "    return raw ? JSON.parse(raw) : [];",
+    "comment": "`JSON.parse` 未進行例外處理，若儲存非合法 JSON 格式將造成頁面白畫面崩潰。",
+    "suggestion": "使用 `try...catch` 包覆解析邏輯，失敗時回退為預設空陣列 `[]`。"
+  },
+  {
+    "file": "src/hooks/useFavorites.ts",
+    "line": 14,
+    "codeSnippet": "    saveFavorites(favorites);",
+    "comment": "初次掛載 (Mount) 時即會觸發 `saveFavorites` POST 請求，引發不必要的寫入副作用。",
+    "suggestion": "使用 `useRef` 標記初次掛載狀態，跳過初次渲染時的遠端寫入請求。"
+  },
+  {
+    "file": "src/hooks/useFavorites.ts",
+    "line": 17,
+    "codeSnippet": "  const toggleFavorite = useCallback((id: number) => {",
+    "comment": "`useCallback` 缺少 `favorites` 依賴，回呼函式閉包永久捕獲初始陣列值。",
+    "suggestion": "將依賴補齊為 `[favorites]`，或在內部改用函式型更新以移除對外部變數的捕獲依賴。"
+  },
+  {
+    "file": "src/hooks/useFavorites.ts",
+    "line": 19,
+    "codeSnippet": "      setFavorites(favorites.filter((f) => f !== id));",
+    "comment": "狀態更新直接依賴舊閉包變數 `favorites`，產生 Stale Closure 導致資料被舊值覆寫。",
+    "suggestion": "改用 functional update `setFavorites(prev => prev.includes(id) ? prev.filter(...) : [...prev, id])`。"
+  }
+]

@@ -55,11 +55,15 @@ export function extractBacktickSnippets(comment?: string, suggestion?: string): 
  *    - If the matched line doesn't contain any snippet, search ±5 lines around it (only snippets that occur on
  *      a single line of the file diff may move the anchor).
  *    - If found in ±5 lines, switch to that line.
- *    - If not found in ±5 lines, keep original line and set lineVerified = false.
+ *    - If not found in ±5 lines, keep original line; it stays verified only when the codeSnippet itself is
+ *      strong evidence (see 5), otherwise lineVerified = false. Comments often mention the enclosing
+ *      hook / function name (`useEffect`, `toggleFavorite`) that sits on another line of the same block.
  *    - If comment has no backticked snippets, retain existing logic.
  * 5. Short / duplicate snippet reliability:
  *    - If codeSnippet (without spaces) < 8 characters or appears multiple times in the file diff,
  *      and did not pass backticked snippet verification, mark lineVerified = false.
+ *    - A codeSnippet that exactly matches exactly one line of the file diff is strong evidence by itself;
+ *      a short one (e.g. `}, []);`) additionally needs the AI line number to point at that same line.
  * 6. Fallback:
  *    - If codeSnippet cannot be found anywhere in the file diff, return null lines with lineVerified = false.
  *      AI 給的行號（例如 999）未經驗證，不保留，以免被當成可信行號顯示或發布。
@@ -187,6 +191,13 @@ export function resolveReviewLine(
 
   const candidateLine = allLines[candidateIndex];
 
+  // codeSnippet 逐字且唯一命中這一行時本身就是證據；短片段（如 `}, []);`）還要 AI 行號剛好指向同一行
+  const candidateLineNumber =
+    candidateLine.type === 'delete' ? candidateLine.oldLineNumber : candidateLine.newLineNumber;
+  const aiLineAgrees = fallbackLine != null && candidateLineNumber === fallbackLine;
+  const snippetIsEvidence =
+    isExactMatch(candidateLine) && !isDuplicateInFile && (!isTooShort || aiLineAgrees);
+
   // 4. Strengthened snippet verification with backtick snippets
   // 候選行不是刪除行時，不把錨點移到刪除行（建議常寫「改回舊寫法」，會剛好命中被刪掉的那行）
   const isEligibleLine = (line: DiffLine): boolean => candidateLine.type === 'delete' || line.type !== 'delete';
@@ -248,15 +259,16 @@ export function resolveReviewLine(
         lineVerifiedBase = true;
       } else {
         // "找不到就維持原本的結果，並把 lineVerified 標成 false。"
+        // 但 comment 常提到同一區塊其他行的 hook／函式名稱，codeSnippet 本身足以佐證時仍視為已驗證
         effectiveLine = candidateLine;
-        passedSnippetVerification = false;
-        lineVerifiedBase = false;
+        passedSnippetVerification = snippetIsEvidence;
+        lineVerifiedBase = snippetIsEvidence;
       }
     }
   } else {
     // "如果 comment 裡沒有任何反引號片段，就維持現有的邏輯。"
     effectiveLine = candidateLine;
-    passedSnippetVerification = false;
+    passedSnippetVerification = snippetIsEvidence;
     lineVerifiedBase = true;
   }
 
