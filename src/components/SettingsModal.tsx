@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Key, ShieldCheck, Server, Sparkles, CheckCircle2, AlertCircle, X, HelpCircle } from 'lucide-react';
 import { AppSettings } from '../types/settings';
+import { getMixedContentWarning } from '../core/mixed-content';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -26,10 +27,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   if (!isOpen) return null;
 
+  const gitlabMixedContentWarning = getMixedContentWarning(gitlabBaseUrl);
+
   const handleTestGitLabConnection = async () => {
     if (!gitlabToken.trim()) {
       setGitlabTestStatus('error');
       setGitlabTestMsg('請先填入 Personal Access Token');
+      return;
+    }
+    if (gitlabMixedContentWarning) {
+      setGitlabTestStatus('error');
+      setGitlabTestMsg(gitlabMixedContentWarning);
       return;
     }
     setGitlabTestStatus('testing');
@@ -225,6 +233,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   placeholder="https://gitlab.com 或公司自建 GitLab 域名"
                   className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-md focus:border-indigo-500 focus:outline-none"
                 />
+                {gitlabMixedContentWarning && (
+                  <p className="mt-1 text-[11px] text-amber-700 flex items-start gap-1">
+                    <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+                    {gitlabMixedContentWarning}
+                  </p>
+                )}
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
