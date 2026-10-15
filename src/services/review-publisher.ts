@@ -9,6 +9,7 @@ import {
   fetchGitLabMergeRequest,
   GitLabApiError,
 } from './gitlab-api';
+import { hasSuggestion } from '../core/review-text';
 
 export interface PublishTarget {
   baseUrl: string;
@@ -31,7 +32,7 @@ const POSITION_FAILURE_STATUSES = new Set([400, 500]);
 
 /** 建議為空（undefined、空字串、只有空白）時不輸出「修改建議」段落 */
 const reviewBody = (review: MRReviewItem, comment: string, suggestion: string | undefined) => {
-  const suggestionBlock = suggestion?.trim() ? `> 💡 **修改建議**：\n> ${suggestion}\n\n` : '';
+  const suggestionBlock = hasSuggestion(suggestion) ? `> 💡 **修改建議**：\n> ${suggestion}\n\n` : '';
   return `**[${review.severity.toUpperCase()}] ${review.category.toUpperCase()}**: ${comment}\n\n${suggestionBlock}*— 來自 GitLab MR 審查工具*`;
 };
 

@@ -36,6 +36,7 @@ import { ReviewPublishState } from '../types/gitlab';
 import { DiffFile } from '../types/diff';
 import { PublishedMatch } from '../core/publish-dedup';
 import { formatHistoryTime } from '../core/history-store';
+import { formatReviewForCopy } from '../core/review-text';
 
 interface ReviewCommentsListProps {
   reviews: MRReviewItem[];
@@ -307,9 +308,12 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
   const handleCopyReview = (review: MRReviewItem, index: number) => {
     const comment = draftEdits[index]?.comment || review.comment;
     const suggestion = draftEdits[index]?.suggestion || review.suggestion;
-    const formatted = `**[${SEVERITY_META[review.severity].label}] ${
-      CATEGORY_META[review.category].label
-    }**: ${comment}\n\n> 💡 **修改建議**：\n> ${suggestion}`;
+    const formatted = formatReviewForCopy(
+      SEVERITY_META[review.severity].label,
+      CATEGORY_META[review.category].label,
+      comment,
+      suggestion
+    );
     navigator.clipboard.writeText(formatted);
     setCopiedIndex(index);
     setTimeout(() => setCopiedIndex(null), 2000);
