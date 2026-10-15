@@ -1,6 +1,0 @@
-{
-  "name": "GitLab MR 講解與審查工具",
-  "description": "瀏覽器本機端 GitLab MR 講解與審查工具，支援意圖分組、Dagre 結構圖自動排版與規範化審查意見",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
