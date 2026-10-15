@@ -9,7 +9,26 @@ import Root from '../Root';
 import { SETTINGS_STORAGE_KEY } from '../core/settings-store';
 import { SAMPLE_ANALYSIS_RESULT } from '../services/diff-sources/sample-analysis';
 import { SAMPLE_GIT_DIFF } from '../services/diff-sources/sample-diffs';
+import { EMPTY_COMMENT_MESSAGE } from '../core/review-text';
+import type { PublishBatchFn } from '../app/app-services';
 import { DEMO_BANNER_TEXT, DEMO_NOTICE } from './demo-mode';
+
+/** 攔下示範 GitLab 交給假發布器的每一批，確認實際收到哪些意見（行為不變） */
+const fakePublishBatchSpy = vi.hoisted(() => vi.fn());
+vi.mock('./fake-publisher', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./fake-publisher')>();
+  return {
+    ...actual,
+    createDemoGitLabGateway: (...args: Parameters<typeof actual.createDemoGitLabGateway>) => {
+      const gateway = actual.createDemoGitLabGateway(...args);
+      const publishBatch: PublishBatchFn = (...batchArgs) => {
+        fakePublishBatchSpy(...batchArgs);
+        return gateway.publishBatch(...batchArgs);
+      };
+      return { ...gateway, publishBatch };
+    },
+  };
+});
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -61,6 +80,7 @@ const settingsKeyTouched = () =>
   );
 
 beforeEach(() => {
+  fakePublishBatchSpy.mockClear();
   fetchSpy = vi.fn(async () => {
     throw new Error('測試中不應發出網路請求');
   });
@@ -175,6 +195,53 @@ describe('示範模式完整流程（?demo=1）', () => {
 
     const links = Array.from(document.querySelectorAll('a[href]')).map((a) => a.getAttribute('href') ?? '');
     expect(links.filter((h) => /gitlab|merge_requests/i.test(h))).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('把某則意見內文清空：不能勾、不能複製或單則發布，就地提示，發布已選時假發布器收不到那則', async () => {
+    await mount('/?demo=1');
+    await click(findButton('分析'));
+    await waitFor(() => text().includes(SAMPLE_ANALYSIS_RESULT.title), '分析結果');
+
+    const total = SAMPLE_ANALYSIS_RESULT.reviews.length;
+    const checkboxes = Array.from(container.querySelectorAll<HTMLButtonElement>('button[aria-pressed]'));
+    for (const checkbox of checkboxes) await click(checkbox);
+    expect(findButton(`發布已選 ${total} 則`)).toBeTruthy();
+
+    // 編輯第一則，把內文清空
+    const card = checkboxes[0].closest<HTMLElement>('div[tabindex="0"]')!;
+    await click(card.querySelector<HTMLButtonElement>('button[aria-label="編輯草稿"]')!);
+    const commentInput = card.querySelector('textarea')!;
+    const clearedComment = commentInput.value;
+    expect(clearedComment.trim()).not.toBe('');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setter.call(commentInput, '');
+      commentInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    // 自動取消勾選並鎖住；就地提示；複製與單則發布也鎖住
+    const emptyCheckbox = card.querySelector<HTMLButtonElement>('button[aria-pressed]')!;
+    expect(emptyCheckbox.getAttribute('aria-pressed')).toBe('false');
+    expect(emptyCheckbox.disabled).toBe(true);
+    await click(emptyCheckbox);
+    expect(emptyCheckbox.getAttribute('aria-pressed')).toBe('false');
+    expect(card.querySelector('[role="status"]')?.textContent).toContain(EMPTY_COMMENT_MESSAGE);
+    expect(card.querySelector<HTMLButtonElement>('button[aria-label="複製意見"]')!.disabled).toBe(true);
+    expect(card.querySelector<HTMLButtonElement>('button[aria-label="發布單則"]')!.disabled).toBe(true);
+
+    await click(findButton(`發布已選 ${total - 1} 則`));
+    await waitFor(() => !!document.querySelector('[role="dialog"]'), '確認視窗');
+    await click(findButton('確認發送', document.querySelector('[role="dialog"]')!));
+    await waitFor(() => !document.querySelector('[role="dialog"]'), '發布完成');
+    expect(text()).toContain(`已發布 ${total - 1} 則審查意見。（${DEMO_NOTICE}）`);
+
+    expect(fakePublishBatchSpy).toHaveBeenCalledTimes(1);
+    const sent = fakePublishBatchSpy.mock.calls[0][1] as Parameters<PublishBatchFn>[1];
+    expect(sent).toHaveLength(total - 1);
+    expect(sent.every((item) => item.comment.trim() !== '')).toBe(true);
+    expect(sent.map((item) => item.comment)).not.toContain(clearedComment);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });

@@ -145,6 +145,46 @@ describe('清單上每則發布結果', () => {
   });
 });
 
+describe('內文清空的意見（一般與示範模式一律套用）', () => {
+  const renderEmpty = () =>
+    renderToStaticMarkup(
+      <ReviewCommentsList
+        reviews={[review(), review({ file: 'src/b.ts', comment: '第二則意見內容' })]}
+        groups={[]}
+        selectedGroupId={null}
+        onPublishSingle={() => {}}
+        selectedIndices={new Set()}
+        draftEdits={{ 0: { comment: '  \n ', suggestion: '' } }}
+      />
+    );
+
+  it('就地顯示「內文是空的，不會發布」，勾選框、複製與單則發布都停用；只用 @theme 語意色彩', () => {
+    const html = renderEmpty();
+    expect(html.match(/內文是空的，不會發布<\/span>/g)).toHaveLength(1);
+    expect(html.match(/<button[^>]*disabled=""[^>]*aria-pressed="false"/g)).toHaveLength(1);
+    expect(html.match(/<button[^>]*disabled=""[^>]*aria-label="複製意見"/g)).toHaveLength(1);
+    expect(html.match(/<button[^>]*disabled=""[^>]*aria-label="發布單則"/g)).toHaveLength(1);
+    const hint = html.match(/<span role="status"[^>]*>.*?<\/span>/)?.[0] ?? '';
+    expect(hint).toContain('text-danger-text');
+    expect(hint).not.toMatch(/\b(?:bg|text|border)-(?:slate|indigo|amber|rose|sky|orange|emerald|white)\b/);
+  });
+
+  it('內文清空且發布失敗時，重試按鈕也停用', () => {
+    const html = renderToStaticMarkup(
+      <ReviewCommentsList
+        reviews={[review()]}
+        groups={[]}
+        selectedGroupId={null}
+        onPublishSingle={() => {}}
+        publishStates={{ 0: { status: 'error', errorMessage: 'x' } }}
+        selectedIndices={new Set()}
+        draftEdits={{ 0: { comment: '', suggestion: '' } }}
+      />
+    );
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?重試<\/button>/);
+  });
+});
+
 describe('重複發布警告', () => {
   it('有未發布的項目時，主按鈕只發未發布的，另有「仍要全部發布」', () => {
     const html = renderToStaticMarkup(

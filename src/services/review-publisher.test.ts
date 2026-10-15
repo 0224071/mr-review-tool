@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildDiscussionPosition, plannedPublishMode, publishReviewBatch, publishReviewItem } from './review-publisher';
 import { MRReviewItem } from '../types/review';
-import { resolveEffectiveSuggestion } from '../core/review-text';
+import { resolveEffectiveComment, resolveEffectiveSuggestion } from '../core/review-text';
 import { GitLabDiffRefs } from '../types/gitlab';
 
 const TARGET = { baseUrl: 'https://gitlab.example.com', token: 'tkn', projectPath: 'grp/proj', mrIid: 7 };
@@ -295,5 +295,42 @@ describe('publishReviewBatch', () => {
     expect(first[0].ok).toBe(false);
     const retry = await publishReviewBatch(TARGET, [item(5)], REFS);
     expect(retry).toEqual([{ index: 5, ok: true, result: { discussionId: 'disc-retry', mode: 'inline' } }]);
+  });
+});
+
+describe('內文是空的意見不發布', () => {
+  it('單則發布：內文空字串或只有空白時不呼叫 GitLab，直接拋錯', async () => {
+    const calls = mockGitLab({ discussion: () => json({ id: 'd' }) });
+    await expect(publishReviewItem(TARGET, review(), '', '建議', REFS)).rejects.toThrow('內文是空的，不會發布');
+    await expect(publishReviewItem(TARGET, review({ lineVerified: false }), ' \n ', '', REFS)).rejects.toThrow(
+      '內文是空的，不會發布'
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it('發布已選：內文清空的那則標為失敗且不送出，其餘照常發布', async () => {
+    const calls = mockGitLab({ discussion: (_b, nth) => json({ id: `d-${nth}` }) });
+    const ai = review();
+    const outcomes = await publishReviewBatch(
+      TARGET,
+      [
+        { index: 0, review: ai, comment: resolveEffectiveComment(undefined, ai.comment), suggestion: '' },
+        { index: 1, review: ai, comment: resolveEffectiveComment('  ', ai.comment), suggestion: '' },
+        { index: 2, review: ai, comment: resolveEffectiveComment('', ai.comment), suggestion: '' },
+      ],
+      REFS
+    );
+    expect(outcomes.map((o) => o.ok)).toEqual([true, false, false]);
+    if (!outcomes[1].ok) expect(outcomes[1].error).toBe('內文是空的，不會發布');
+    const posts = calls.filter((c) => c.method === 'POST');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].body?.body).toContain(ai.comment);
+  });
+
+  it('重試：內文仍是空的時同樣不送出', async () => {
+    const calls = mockGitLab({ discussion: () => json({ id: 'd' }) });
+    const retry = await publishReviewBatch(TARGET, [{ index: 4, review: review(), comment: '', suggestion: 'x' }], REFS);
+    expect(retry).toEqual([{ index: 4, ok: false, error: '內文是空的，不會發布' }]);
+    expect(calls).toHaveLength(0);
   });
 });

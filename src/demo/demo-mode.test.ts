@@ -8,6 +8,7 @@ import { SAMPLE_DIFF_REFS } from '../services/diff-sources/sample-diffs';
 import { publishReviewBatch as realPublishReviewBatch } from '../services/review-publisher';
 import type { PublishBatchFn } from '../app/app-services';
 import { liveGitLabGateway } from '../app/live-services';
+import { EMPTY_COMMENT_MESSAGE } from '../core/review-text';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -99,6 +100,20 @@ describe('假發布器', () => {
     expect(JSON.stringify(outcomes)).not.toMatch(/https?:|merge_requests/);
     expect(JSON.stringify(DEMO_PUBLISH_TARGET)).not.toMatch(/https?:/);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('內文是空的（或只有空白）與真的發布器一樣拒絕，其餘照常模擬發布', async () => {
+    const { publishReviewBatch } = createFakePublisher({ delayMs: 0 });
+    const outcomes = await publishReviewBatch(
+      DEMO_PUBLISH_TARGET,
+      [
+        { index: 0, review, comment: '   ', suggestion: '' },
+        { index: 1, review, comment: review.comment, suggestion: '' },
+      ],
+      diffRefs
+    );
+    expect(outcomes[0]).toEqual({ index: 0, ok: false, error: EMPTY_COMMENT_MESSAGE });
+    expect(outcomes[1].ok).toBe(true);
   });
 
   it('示範 GitLab：讀取 MR 直接拒絕、摘要與共享只模擬，全程不呼叫 fetch', async () => {

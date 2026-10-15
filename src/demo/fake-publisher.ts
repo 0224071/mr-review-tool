@@ -1,12 +1,14 @@
 /**
  * 示範用發布器：函式簽章與 services/review-publisher.ts 相同，但不連 GitLab。
  * 每則結果都帶「示範，未實際發布」標註，discussionId 為 demo-*，不產生任何 MR 連結。
+ * 內文為空時與真的發布器一樣拒絕（該則記為失敗）。
  */
 import type { PublishOutcome, PublishedResult, GitLabGateway } from '../app/app-services';
 import { PublishBatchItem, plannedPublishMode, PublishTarget } from '../services/review-publisher';
 import { SAMPLE_DIFF_REFS } from '../services/diff-sources/sample-diffs';
 import { GitLabDiffRefs } from '../types/gitlab';
 import { MRReviewItem } from '../types/review';
+import { EMPTY_COMMENT_MESSAGE, hasCommentText } from '../core/review-text';
 import { DEMO_NOTICE } from './demo-mode';
 
 export const DEMO_PUBLISH_DELAY_MS = 300;
@@ -30,10 +32,11 @@ export function createFakePublisher(options: { delayMs?: number } = {}) {
   async function publishReviewItem(
     _target: PublishTarget,
     review: MRReviewItem,
-    _comment: string,
+    comment: string,
     _suggestion: string | undefined,
     diffRefs: GitLabDiffRefs | undefined
   ): Promise<PublishedResult> {
+    if (!hasCommentText(comment)) throw new Error(EMPTY_COMMENT_MESSAGE);
     await wait(delayMs);
     seq += 1;
     return { discussionId: `demo-${seq}`, mode: plannedPublishMode(review, diffRefs), notice: DEMO_NOTICE };
@@ -48,8 +51,13 @@ export function createFakePublisher(options: { delayMs?: number } = {}) {
     const outcomes: PublishOutcome[] = [];
     for (const item of items) {
       hooks.onStart?.(item.index);
-      const result = await publishReviewItem(target, item.review, item.comment, item.suggestion, diffRefs);
-      const outcome: PublishOutcome = { index: item.index, ok: true, result };
+      let outcome: PublishOutcome;
+      try {
+        const result = await publishReviewItem(target, item.review, item.comment, item.suggestion, diffRefs);
+        outcome = { index: item.index, ok: true, result };
+      } catch (err) {
+        outcome = { index: item.index, ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
       outcomes.push(outcome);
       hooks.onDone?.(outcome);
     }
