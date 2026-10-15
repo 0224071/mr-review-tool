@@ -4,6 +4,7 @@ import { createDemoGitLabGateway, createFakePublisher, DEMO_PUBLISH_TARGET } fro
 import { createDemoProvider, DEMO_ANALYSIS_DELAY_MS } from './fake-provider';
 import { createNoopHistoryStore } from './noop-history-store';
 import { SAMPLE_ANALYSIS_RESULT } from '../services/diff-sources/sample-analysis';
+import { SAMPLE_DIFF_REFS } from '../services/diff-sources/sample-diffs';
 import { publishReviewBatch as realPublishReviewBatch } from '../services/review-publisher';
 import type { PublishBatchFn } from '../app/app-services';
 import { liveGitLabGateway } from '../app/live-services';
@@ -113,6 +114,26 @@ describe('假發布器', () => {
     await gitlab.shareAnalysis(target, SAMPLE_ANALYSIS_RESULT, null);
     expect(gitlab.notice).toBe(DEMO_NOTICE);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('示範 GitLab 提供範例的假 diff_refs（40 字元 hex）；正式版沒有', () => {
+    const gitlab = createDemoGitLabGateway({ delayMs: 0 });
+    expect(gitlab.fallbackDiffRefs).toEqual(SAMPLE_DIFF_REFS);
+    for (const sha of Object.values(SAMPLE_DIFF_REFS)) expect(sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(liveGitLabGateway.fallbackDiffRefs).toBeUndefined();
+  });
+
+  it('帶範例 diff_refs 時：行號已驗證走行內、未驗證走一般留言', async () => {
+    const { publishReviewBatch } = createFakePublisher({ delayMs: 0 });
+    const outcomes = await publishReviewBatch(
+      DEMO_PUBLISH_TARGET,
+      [
+        { index: 0, review: { ...review, newLine: 19, lineVerified: true }, comment: 'a', suggestion: '' },
+        { index: 1, review: { ...review, newLine: null, line: null, lineVerified: false }, comment: 'b', suggestion: '' },
+      ],
+      SAMPLE_DIFF_REFS
+    );
+    expect(outcomes.map((o) => o.ok && o.result.mode)).toEqual(['inline', 'general']);
   });
 
   it('正式版沒有 MR 網址時無法組出發布目標', () => {

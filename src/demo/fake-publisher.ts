@@ -4,6 +4,7 @@
  */
 import type { PublishOutcome, PublishedResult, GitLabGateway } from '../app/app-services';
 import { PublishBatchItem, plannedPublishMode, PublishTarget } from '../services/review-publisher';
+import { SAMPLE_DIFF_REFS } from '../services/diff-sources/sample-diffs';
 import { GitLabDiffRefs } from '../types/gitlab';
 import { MRReviewItem } from '../types/review';
 import { DEMO_NOTICE } from './demo-mode';
@@ -68,6 +69,8 @@ export function createDemoGitLabGateway(options: { delayMs?: number } = {}): Git
   return {
     notice: DEMO_NOTICE,
     targetLabel: '示範 MR',
+    // 範例 diff 的假版本資訊，讓行號已驗證的意見和正式版一樣以行內留言發布
+    fallbackDiffRefs: SAMPLE_DIFF_REFS,
     isConfigured: () => true,
     resolveTarget: () => DEMO_PUBLISH_TARGET,
     fetchMergeRequest: reject,

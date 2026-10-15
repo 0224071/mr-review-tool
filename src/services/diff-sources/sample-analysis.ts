@@ -186,8 +186,9 @@ export const SAMPLE_ANALYSIS_RESULT: MRAnalysisResult = {
       category: 'test',
       severity: 'medium',
       file: 'src/tests/discountCalculator.test.ts',
-      line: 15,
-      codeSnippet: "const result = calculateFinalTotal(1000, 'percentage', 20);",
+      // 刻意引用 diff 中不存在的程式碼與行號：示範「行號未驗證 → 改發一般留言」
+      line: 45,
+      codeSnippet: "expect(calculateFinalTotal(1000, 'percentage', 150)).toBe(0);",
       comment: '測試僅驗證正常數值，未覆蓋百分比大於 100% 的極端計算邏輯。',
       suggestion: '請新增百分比大於 100 時的測試案例，確保不會算出負數總額。',
     },

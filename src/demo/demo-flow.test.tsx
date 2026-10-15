@@ -139,6 +139,46 @@ describe('示範模式完整流程（?demo=1）', () => {
     expect(idbOpen).not.toHaveBeenCalled();
   });
 
+  it('確認視窗與正式模式一樣：行號已驗證走行內留言，對不上 diff 的那則走一般留言', async () => {
+    await mount('/?demo=1');
+    await click(findButton('分析'));
+    await waitFor(() => text().includes(SAMPLE_ANALYSIS_RESULT.title), '分析結果');
+
+    const total = SAMPLE_ANALYSIS_RESULT.reviews.length;
+    for (const checkbox of Array.from(container.querySelectorAll('button[aria-pressed]'))) {
+      await click(checkbox as HTMLElement);
+    }
+    await click(findButton(`發布已選 ${total} 則`));
+    await waitFor(() => !!document.querySelector('[role="dialog"]'), '確認視窗');
+    const dialog = document.querySelector('[role="dialog"]')!;
+
+    expect(dialog.textContent).toContain(DEMO_NOTICE);
+    expect(dialog.textContent).toContain(`行內 ${total - 1} · 一般留言 1`);
+    const items = Array.from(dialog.querySelectorAll('ol > li'));
+    expect(items).toHaveLength(total);
+    const inline = items.filter((li) => /行內留言 L\d+/.test(li.textContent ?? ''));
+    const general = items.filter((li) => (li.textContent ?? '').includes('一般留言（行號未驗證）'));
+    expect(inline).toHaveLength(total - 1);
+    expect(general).toHaveLength(1);
+    expect(general[0].textContent).toContain('src/tests/discountCalculator.test.ts');
+    expect(dialog.textContent).toContain('包含 1 則行號未驗證的意見');
+    expect(dialog.textContent).not.toContain('缺少 diff 版本資訊');
+    expect(dialog.querySelector('a[href]')).toBeNull();
+
+    await click(findButton('確認發送', dialog));
+    await waitFor(() => !document.querySelector('[role="dialog"]'), '發布完成');
+    expect(text()).toContain(`已發布 ${total} 則審查意見。（${DEMO_NOTICE}）`);
+    const cardNotices = Array.from(container.querySelectorAll('span')).filter((s) => s.textContent === DEMO_NOTICE);
+    expect(cardNotices).toHaveLength(total);
+    const generalBadges = Array.from(container.querySelectorAll('span')).filter((s) => s.textContent === '以一般留言發布');
+    expect(generalBadges).toHaveLength(1);
+
+    const links = Array.from(document.querySelectorAll('a[href]')).map((a) => a.getAttribute('href') ?? '');
+    expect(links.filter((h) => /gitlab|merge_requests/i.test(h))).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it('示範中開啟設定不顯示金鑰欄位，也不讀寫 localStorage', async () => {
     await mount('/?demo=1');
     await click(findButton('偏好設定'));

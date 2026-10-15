@@ -57,6 +57,8 @@ export interface GitLabGateway {
   notice?: string;
   /** 沒有 MR 網址時仍可發布的目標名稱；正式版為 undefined（必須有 MR 網址） */
   targetLabel?: string;
+  /** 結果與 MR 都沒有 diff_refs 時使用的版本資訊（示範模式為範例的假版本）；正式版為 undefined */
+  fallbackDiffRefs?: GitLabDiffRefs;
   isConfigured(settings: AppSettings): boolean;
   /** 由 MR 網址與設定組出目標；網址缺漏或無效時拋錯 */
   resolveTarget(mrUrl: string, settings: AppSettings): PublishTarget;

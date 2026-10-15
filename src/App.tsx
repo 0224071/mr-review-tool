@@ -150,6 +150,8 @@ export default function App({ services }: { services: AppServices }) {
   // 產生目前結果的 diff 與 diff_refs（可能與左欄最新抓取的 diff 不同，例如 MR 有新 commit）
   const [resultRawDiff, setResultRawDiff] = useState<string>('');
   const [resultDiffRefs, setResultDiffRefs] = useState<GitLabDiffRefs | undefined>(undefined);
+  // 發布時使用的 diff_refs：結果產生時的版本 → 目前 MR → 服務提供的備用版本（示範模式）
+  const publishDiffRefs = resultDiffRefs ?? currentGitLabMr?.diff_refs ?? gitlab.fallbackDiffRefs;
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const [draftEdits, setDraftEdits] = useState<DraftEdits>({});
   const [publishedRecords, setPublishedRecords] = useState<PublishedRecord[]>([]);
@@ -771,7 +773,6 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
       } else {
         // Publish Review Items via Discussions API
         // 使用產生目前結果時的 diff_refs，行號才會對到同一個版本
-        const diffRefs = resultDiffRefs ?? currentGitLabMr?.diff_refs;
 
         const items = publishModalConfig.itemsToPublish;
         const byIndex = new Map(items.map((item) => [item.index, item]));
@@ -783,7 +784,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
             comment: item.customComment || item.review.comment,
             suggestion: resolveEffectiveSuggestion(item.customSuggestion, item.review.suggestion),
           })),
-          diffRefs,
+          publishDiffRefs,
           {
             onStart: (index) => setPublishStates((prev) => ({ ...prev, [index]: { status: 'sending' } })),
             onDone: (outcome) => {
@@ -1123,7 +1124,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         mrInfo={currentGitLabMr}
         mrUrl={currentGitLabMr?.web_url || gitlabMrUrl}
         itemsToPublish={publishModalConfig.itemsToPublish}
-        diffRefs={resultDiffRefs ?? currentGitLabMr?.diff_refs}
+        diffRefs={publishDiffRefs}
         isPublishingSummary={publishModalConfig.isPublishingSummary}
         summaryTitle={analysisResult?.title}
         targetLabel={gitlab.targetLabel}

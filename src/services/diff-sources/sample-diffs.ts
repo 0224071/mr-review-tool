@@ -1,3 +1,12 @@
+import { GitLabDiffRefs } from '../../types/gitlab';
+
+/** 範例 diff 的假 MR 版本資訊（明顯是假的 sha，只供示範模式預估與模擬行內留言，不會送到 GitLab） */
+export const SAMPLE_DIFF_REFS: GitLabDiffRefs = {
+  base_sha: 'deadbeef'.repeat(5),
+  start_sha: 'deadbeef'.repeat(5),
+  head_sha: 'c0ffee00'.repeat(5),
+};
+
 export const SAMPLE_GIT_DIFF = `diff --git a/src/api/couponApi.ts b/src/api/couponApi.ts
 new file mode 100644
 index 0000000..f8a12e4
