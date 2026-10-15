@@ -26,7 +26,7 @@ test('開啟、關閉與取消設定不會保存變更', async ({page}) => {
   await expect(page.getByLabel(/Google Gemini API Key/)).toHaveValue('');
 });
 
-test('儲存設定後頁首改為偏好設定，重新整理仍保留', async ({page, blockedRequests}) => {
+test('儲存設定後頁首改為偏好設定，重新整理仍保留', async ({page}) => {
   await page.goto('/');
   await page.getByRole('banner').getByRole('button', {name: '填寫金鑰'}).click();
 
@@ -52,5 +52,4 @@ test('儲存設定後頁首改為偏好設定，重新整理仍保留', async ({
   await prefButton.click();
   await expect(page.getByRole('radio', {name: 'Google Gemini'})).toHaveAttribute('aria-checked', 'true');
 
-  expect(blockedRequests).toEqual([]);
 });

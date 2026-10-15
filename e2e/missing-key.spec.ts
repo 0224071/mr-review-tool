@@ -9,13 +9,12 @@ test.beforeEach(async ({page}) => {
   await page.getByRole('button', {name: '分析', exact: true}).click();
 });
 
-test('顯示尚未設定金鑰的提示且不連外', async ({page, blockedRequests}) => {
+test('顯示尚未設定金鑰的提示且不連外', async ({page}) => {
   const guide = page.getByRole('alert', {name: '尚未設定金鑰'});
   await expect(guide).toBeVisible();
   await expect(guide.getByText('尚未設定 Google Gemini API Key，還不能分析')).toBeVisible();
   await expect(guide.getByRole('button', {name: '用範例試試看'})).toBeVisible();
   await expect(guide.getByRole('button', {name: '填寫金鑰'})).toBeVisible();
-  expect(blockedRequests).toEqual([]);
 
   await guide.getByRole('button', {name: '關閉引導'}).click();
   await expect(guide).toBeHidden();

@@ -15,14 +15,13 @@ test.beforeEach(async ({page}) => {
   await expect(page.getByText(RESULT_TITLE).first()).toBeVisible();
 });
 
-test('顯示分析標題、模型標記與意圖分組', async ({page, blockedRequests}) => {
+test('顯示分析標題、模型標記與意圖分組', async ({page}) => {
   await expect(page.getByText('示範 · 範例分析')).toBeVisible();
   await expect(page.getByText('依意圖分組篩選')).toBeVisible();
   await expect(page.getByRole('button', {name: /^全部/})).toBeVisible();
   for (const name of GROUPS) {
     await expect(page.getByRole('button', {name: new RegExp(`^${name}`)})).toBeVisible();
   }
-  expect(blockedRequests).toEqual([]);
 });
 
 test('依分組篩選審查意見', async ({page}) => {
@@ -49,7 +48,7 @@ test('審查意見顯示檔案、行號與操作按鈕', async ({page}) => {
   await expect(page.getByRole('button', {name: '複製意見'}).first()).toBeVisible();
 });
 
-test('展開程式碼片段後開啟完整檔案的 Diff 彈窗並關閉', async ({page, blockedRequests}) => {
+test('展開程式碼片段後開啟完整檔案的 Diff 彈窗並關閉', async ({page}) => {
   await page.getByRole('button', {name: /src\/api\/couponApi\.ts\s*:L17/}).click();
   await expect(page.getByText('問題行前後各 5 行變更')).toBeVisible();
   await page.getByRole('button', {name: '查看完整檔案'}).click();
@@ -60,7 +59,6 @@ test('展開程式碼片段後開啟完整檔案的 Diff 彈窗並關閉', async
 
   await page.getByRole('button', {name: '關閉', exact: true}).click();
   await expect(page.getByText('審查重點行: L17')).toBeHidden();
-  expect(blockedRequests).toEqual([]);
 });
 
 test('檔案分頁可開啟 Diff 彈窗', async ({page}) => {

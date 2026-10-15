@@ -1,7 +1,7 @@
+/// <reference types="vitest/config" />
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-/// <reference types="vitest/config" />
 import {defineConfig, type Plugin} from 'vite';
 import {configDefaults} from 'vitest/config';
 import {CSP_META} from './csp.config';
