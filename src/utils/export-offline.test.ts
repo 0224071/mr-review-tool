@@ -392,3 +392,52 @@ describe('離線 HTML 的 category 做 HTML 跳脫（#65）', () => {
     expect(html).toContain('分類: bug');
   });
 });
+
+/** attr 每次出現都緊接在跳脫過的文字之後（`&lt;img src=x ` 或 `&quot; `），沒有以標籤屬性形式出現 */
+const countMatches = (html: string, re: RegExp) => (html.match(re) ?? []).length;
+const expectOnlyEscapedAttr = (html: string, attr: string) => {
+  const all = countMatches(html, new RegExp(`\\b${attr}\\s*=`, 'gi'));
+  const escaped = countMatches(html, new RegExp(`(&lt;img src=x |&quot; )${attr}\\s*=`, 'gi'));
+  expect(all).toBe(escaped);
+};
+
+describe('離線 HTML 的 severity 做 HTML 跳脫（#71）', () => {
+  const review: MRAnalysisResult['reviews'][number] = {
+    groupId: 'g1',
+    category: 'bug',
+    severity: 'medium',
+    file: 'src/hooks/usePagination.ts',
+    line: 2,
+    codeSnippet: 'const start = page * pageSize;',
+    comment: 'page 從 1 開始',
+    suggestion: '改成 (page - 1) * pageSize',
+  };
+  const exportWith = (over: Record<string, unknown>) =>
+    generateOfflineHtmlReport({ ...VALID_RESULT, reviews: [{ ...review, ...over } as never] });
+
+  it('severity 夾帶 HTML 時不會變成標籤（嚴重程度標籤與 class 屬性都跳脫）', () => {
+    const html = exportWith({ severity: '<img src=x onerror=alert(1)>' });
+    expect(html).not.toMatch(/<img/i);
+    expectOnlyEscapedAttr(html, 'onerror');
+    expect(html).toContain('嚴重程度: &lt;IMG SRC=X ONERROR=ALERT(1)&gt;');
+    expect(html).toContain('class="review-item review-&lt;img src=x onerror=alert(1)&gt;"');
+  });
+
+  it('severity 以引號跳出 class 屬性也不行', () => {
+    const html = exportWith({ severity: 'x" onmouseover="alert(1)' });
+    expect(html).not.toContain('" onmouseover="');
+    expectOnlyEscapedAttr(html, 'onmouseover');
+  });
+
+  it.each([null, undefined, 42, '__proto__'])('severity／category 為 %s 時匯出不崩潰', (v) => {
+    const html = exportWith({ severity: v, category: v });
+    expect(html).toContain('<!DOCTYPE html>');
+    expect(html).toContain('嚴重程度: ');
+  });
+
+  it('一般 severity 照常顯示為大寫', () => {
+    const html = exportWith({ severity: 'high' });
+    expect(html).toContain('嚴重程度: HIGH');
+    expect(html).toContain('class="review-item review-high"');
+  });
+});

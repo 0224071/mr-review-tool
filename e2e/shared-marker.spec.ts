@@ -168,13 +168,13 @@ test.describe('過期的隱藏標記', () => {
     await expect(page.getByText(RESULT_TITLE)).toHaveCount(0);
     // 只顯示過期提示，請使用者重新分析
     await expect(staleSharedCard(page)).toBeVisible();
-    await expect(staleSharedCard(page).getByRole('button', {name: '重新分析'})).toBeVisible();
+    await expect(staleSharedCard(page).getByRole('button', {name: '抓最新內容重新分析', exact: true})).toBeVisible();
     await expect(staleSharedCard(page)).toContainText(NEW_HEAD_SHA.slice(0, 8));
     await expect(page.getByRole('button', {name: '分析', exact: true})).toBeEnabled();
     expect(aiCalls).toEqual([]);
   });
 
-  test('過期卡片的「重新分析」按鈕走與新 commit 提示列相同的流程（無金鑰時開啟設定引導，不呼叫 AI）', async ({page}) => {
+  test('過期卡片的「抓最新內容重新分析」按鈕走與新 commit 提示列相同的流程（無金鑰時開啟設定引導，不呼叫 AI）', async ({page}) => {
     await mockSharedMr(page, {
       headSha: NEW_HEAD_SHA,
       notes: [note(sharedNoteBody({extra: {headSha: OLD_HEAD_SHA}}))],
@@ -191,7 +191,7 @@ test.describe('過期的隱藏標記', () => {
     const card = staleSharedCard(page);
     await expect(card).toContainText('這份報告分析完後，MR 又有新的 commit，內容可能已經不準');
     await expect(card).toContainText('於 2026/10/1 發布');
-    const reanalyze = card.getByRole('button', {name: '重新分析'});
+    const reanalyze = card.getByRole('button', {name: '抓最新內容重新分析', exact: true});
     await expect(reanalyze).toBeEnabled();
     await reanalyze.click();
     // provider 未設定時顯示設定引導

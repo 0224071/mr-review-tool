@@ -277,9 +277,9 @@ export function generateOfflineHtmlReport(input: MRAnalysisResult): string {
       ${result.reviews
         .map(
           (r) => `
-        <div class="review-item review-${r.severity}">
+        <div class="review-item review-${escapeHtml(r.severity)}">
           <div style="display: flex; gap: 8px; font-size: 11px;">
-            <span class="tag">嚴重程度: ${r.severity.toUpperCase()}</span>
+            <span class="tag">嚴重程度: ${escapeHtml(String(r.severity ?? '').toUpperCase())}</span>
             <span class="tag">分類: ${escapeHtml(r.category)}</span>
             <span class="tag" style="font-family: monospace;">${escapeHtml(r.file)}${
             r.line ? `:L${r.line}` : ''
@@ -314,9 +314,10 @@ export function generateOfflineHtmlReport(input: MRAnalysisResult): string {
 </html>`;
 }
 
-function escapeHtml(str: string): string {
-  if (!str) return '';
-  return str
+/** 結果可能來自被竄改的分享留言或舊紀錄，欄位不一定是字串（null、數字等），一律轉成字串再跳脫 */
+function escapeHtml(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return String(value)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

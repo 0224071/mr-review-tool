@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /**
  * 共享報告 UX（#67、#71）：確認視窗覆寫／新增的文案與「查看原留言」連結、讀取留言中的按鈕文字、
- * 過期共享報告卡片的日期格式、文案與「重新分析」按鈕；作者一律為「顯示名稱 + 灰色小字 @username」。
+ * 過期共享報告卡片的日期格式、文案與「抓最新內容重新分析」按鈕；作者一律為「顯示名稱 + 灰色小字 @username」。
  */
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -187,7 +187,7 @@ describe('過期共享報告卡片', () => {
       );
     });
     const card = container.querySelector('[role="status"]') as HTMLElement;
-    const button = Array.from(card.querySelectorAll('button')).find((b) => b.textContent?.includes('重新分析'));
+    const button = Array.from(card.querySelectorAll('button')).find((b) => b.textContent?.trim() === '抓最新內容重新分析');
     return { card, button, onAnalyze, onReanalyze, unmount: () => act(() => root.unmount()) };
   };
 
@@ -217,7 +217,7 @@ describe('過期共享報告卡片', () => {
     unmount();
   });
 
-  it('「重新分析」是可按的按鈕，觸發與新 commit 提示列相同的 onReanalyze（先重新抓 MR 再分析），不是 onAnalyze', () => {
+  it('「抓最新內容重新分析」是可按的按鈕，觸發與新 commit 提示列相同的 onReanalyze（先重新抓 MR 再分析），不是 onAnalyze', () => {
     const { button, onAnalyze, onReanalyze, unmount } = mount(stale());
     expect(button).toBeDefined();
     expect(button?.disabled).toBe(false);
@@ -227,15 +227,44 @@ describe('過期共享報告卡片', () => {
     unmount();
   });
 
-  it('重新抓取 MR 中時「重新分析」停用', () => {
+  it('重新抓取 MR 中時「抓最新內容重新分析」停用', () => {
     const { button, unmount } = mount(stale(), { isFetchingGitLab: true });
     expect(button?.disabled).toBe(true);
     unmount();
   });
 
-  it('分析中時「重新分析」停用', () => {
+  it('分析中時「抓最新內容重新分析」停用', () => {
     const { button, unmount } = mount(stale(), { isLoading: true });
     expect(button?.disabled).toBe(true);
     unmount();
+  });
+});
+
+describe('新 commit 提示列的按鈕（#71）', () => {
+  it('顯示「抓最新內容重新分析」，按下觸發 onReanalyze', () => {
+    const onReanalyze = vi.fn();
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <AnalysisResultView
+          result={SAMPLE_ANALYSIS_RESULT}
+          selectedIndices={new Set()}
+          onSelectedIndicesChange={() => {}}
+          draftEdits={{}}
+          onDraftEditsChange={() => {}}
+          hasNewCommit
+          onReanalyze={onReanalyze}
+        />
+      );
+    });
+    const bar = Array.from(container.querySelectorAll('[role="status"]')).find((el) =>
+      el.textContent?.includes('此 MR 在分析後有新的 commit')
+    ) as HTMLElement;
+    const button = Array.from(bar.querySelectorAll('button')).find((b) => b.textContent?.trim() === '抓最新內容重新分析');
+    expect(button).toBeDefined();
+    act(() => button!.click());
+    expect(onReanalyze).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
   });
 });

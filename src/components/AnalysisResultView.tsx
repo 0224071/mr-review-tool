@@ -339,7 +339,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
               className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-warning-border bg-surface font-semibold text-warning-text hover:bg-warning-hover"
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              重新分析
+              抓最新內容重新分析
             </button>
           )}
         </div>

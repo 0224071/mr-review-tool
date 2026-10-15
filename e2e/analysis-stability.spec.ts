@@ -205,7 +205,7 @@ test.describe('有模擬 AI 金鑰時分析', () => {
     expect(blockedRequests).toEqual([]);
   });
 
-  test('過期卡片的「重新分析」先重新抓 MR 再分析，AI 只呼叫一次', async ({page, blockedRequests}) => {
+  test('過期卡片的「抓最新內容重新分析」先重新抓 MR 再分析，AI 只呼叫一次', async ({page, blockedRequests}) => {
     const counts = await mockMr(page, {
       headSha: NEW_HEAD_SHA,
       notes: [note(sharedNoteBody({headSha: OLD_HEAD_SHA}))],
@@ -219,7 +219,7 @@ test.describe('有模擬 AI 金鑰時分析', () => {
     const card = staleSharedCard(page);
     await expect(card).toBeVisible();
     const mrFetchesBefore = counts.mr;
-    await card.getByRole('button', {name: '重新分析'}).dblclick();
+    await card.getByRole('button', {name: '抓最新內容重新分析', exact: true}).dblclick();
     await expect(page.getByText(RESULT_TITLE).first()).toBeVisible();
     await page.waitForTimeout(800);
 

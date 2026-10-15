@@ -58,13 +58,13 @@ describe('DiffInputPanel 底部主按鈕文字', () => {
   it('沒有結果時顯示「分析」', () => {
     const texts = buttonTexts(render(DEFAULT_SETTINGS, { rawDiff: 'diff --git a/a b/a', hasResult: false }));
     expect(texts).toContain('分析');
-    expect(texts).not.toContain('分析目前的 diff');
+    expect(texts).not.toContain('用目前的 Diff 重新分析');
   });
 
-  it('有結果時顯示「分析目前的 diff」，不是「重新分析」', () => {
+  it('有結果時顯示「用目前的 Diff 重新分析」，不是「抓最新內容重新分析」', () => {
     const texts = buttonTexts(render(DEFAULT_SETTINGS, { rawDiff: 'diff --git a/a b/a', hasResult: true }));
-    expect(texts).toContain('分析目前的 diff');
+    expect(texts).toContain('用目前的 Diff 重新分析');
     expect(texts).not.toContain('分析');
-    expect(texts).not.toContain('重新分析');
+    expect(texts).not.toContain('抓最新內容重新分析');
   });
 });

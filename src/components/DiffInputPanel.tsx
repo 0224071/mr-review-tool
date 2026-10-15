@@ -26,7 +26,7 @@ interface DiffInputPanelProps {
   onDiffChange: (diff: string) => void;
   parsedDiff: ParsedDiff;
   onAnalyze: () => void;
-  /** 過期共享報告卡片的「重新分析」：先重新抓 MR 再分析（與新 commit 提示列相同） */
+  /** 過期共享報告卡片的「抓最新內容重新分析」：先重新抓 MR 再分析（與新 commit 提示列相同） */
   onReanalyze: () => void;
   onLoadSampleDiff: () => void;
   onLoadSampleAnalysis: () => void;
@@ -268,7 +268,7 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
                     <Users className="w-3.5 h-3.5 text-warning shrink-0" />
                     MR 上的共享分析報告已過期，未載入
                   </span>
-                  {/* 與新 commit 提示列的「重新分析」相同：先重新抓 MR 與 diff，再呼叫 AI 分析 */}
+                  {/* 與新 commit 提示列的「抓最新內容重新分析」相同：先重新抓 MR 與 diff，再呼叫 AI 分析 */}
                   <button
                     type="button"
                     onClick={onReanalyze}
@@ -276,7 +276,7 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
                     className="text-[11px] bg-surface hover:bg-warning-subtle text-warning-text border border-warning-border px-2 py-0.5 rounded-md font-semibold shrink-0 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Sparkles className="w-3 h-3" />
-                    重新分析
+                    抓最新內容重新分析
                   </button>
                 </div>
                 <p className="text-[11px] text-warning-text">
@@ -476,8 +476,8 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
           ) : (
             <>
               <Sparkles className={`w-4 h-4 ${hasResult ? 'text-primary' : 'text-indigo-200'}`} />
-              {/* 有結果時仍只分析輸入框目前的 diff（onAnalyze），不重新抓 MR；與過期卡片／新 commit 提示列的「重新分析」區分 */}
-              <span>{hasResult ? '分析目前的 diff' : '分析'}</span>
+              {/* 有結果時仍只分析輸入框目前的 diff（onAnalyze），不重新抓 MR；與過期卡片／新 commit 提示列的「抓最新內容重新分析」區分 */}
+              <span>{hasResult ? '用目前的 Diff 重新分析' : '分析'}</span>
             </>
           )}
         </button>

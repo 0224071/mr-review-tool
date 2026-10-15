@@ -46,6 +46,7 @@ import type { SettingsState } from './useSettings';
 import type { HistoryState } from './useHistory';
 import { formatYmd } from '../core/date-format';
 import { formatAuthorText } from '../core/author-format';
+import { normalizeResultReviews } from '../core/review-category';
 
 /** 未載入的共享報告（分析版本與 MR 目前版本不符，或舊版標記沒有記錄分析版本） */
 export interface StaleSharedAnalysis {
@@ -193,12 +194,16 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
     setStaleSharedAnalysis(null);
   };
 
-  /** 把一筆歷史紀錄套用到畫面（不呼叫 Gemini） */
+  /**
+   * 把一筆歷史紀錄套用到畫面（不呼叫 Gemini）。歷史紀錄與快取可能是舊版或被竄改的資料，
+   * 先正規化 category／severity，避免畫面查不到對應的圖示或樣式而整頁白掉。
+   */
   const applyRecord = (record: HistoryRecord) => {
+    const result = normalizeResultReviews(record.result);
     setAnalysisResult(
       record.rawDiff
-        ? { ...record.result, reviews: dropUnverifiedFallbackLines(record.result.reviews, parseGitDiff(record.rawDiff)) }
-        : record.result
+        ? { ...result, reviews: dropUnverifiedFallbackLines(result.reviews, parseGitDiff(record.rawDiff)) }
+        : result
     );
     setCurrentRecordId(record.id);
     setAnalyzedAt(record.analyzedAt);
@@ -315,7 +320,7 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
 
     try {
       const provider = ai.createProvider(settings);
-      const result = await analyzeGitDiff({
+      const aiResult = await analyzeGitDiff({
         rawDiff: diffText,
         provider,
         teamRules: settings.teamRules,
@@ -323,7 +328,8 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
           if (!isStale()) setBatchProgress({ current, total });
         },
       });
-      await commitNewResult(result, diffText, mr, remoteNotes, isStale);
+      // AI 回傳的 category／severity 不一定在認得的範圍內，寫入歷史紀錄前先正規化
+      await commitNewResult(normalizeResultReviews(aiResult), diffText, mr, remoteNotes, isStale);
     } catch (err: unknown) {
       if (isStale()) return;
       const msg = err instanceof Error ? err.message : String(err);
