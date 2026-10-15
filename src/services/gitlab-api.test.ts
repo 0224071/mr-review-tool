@@ -3,6 +3,7 @@ import {
   createGitLabDiscussion,
   createGitLabGeneralDiscussion,
   fetchGitLabMrNotes,
+  fetchGitLabMrRawDiff,
   GitLabApiError,
 } from './gitlab-api';
 import { GitLabNote } from '../types/gitlab';
@@ -143,5 +144,30 @@ describe('混合內容防護', () => {
       createGitLabGeneralDiscussion('http://gitlab.example.com', 't', 'g/p', 1, 'hi')
     ).rejects.toThrow(MIXED_CONTENT_MESSAGE);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchGitLabMrRawDiff', () => {
+  it('先打 raw_diffs（複數；單數 raw_diff 會 404），有內容就直接使用', async () => {
+    const fetchMock = vi.fn(async () => new Response('diff --git a/x b/x\n', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const text = await fetchGitLabMrRawDiff('https://gitlab.com/', 'tkn', 'grp/proj', 1);
+    expect(text).toBe('diff --git a/x b/x\n');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe(
+      'https://gitlab.com/api/v4/projects/grp%2Fproj/merge_requests/1/raw_diffs'
+    );
+  });
+
+  it('raw_diffs 不可用（舊版 GitLab 404）時改用 /diffs 組回 unified diff', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith('/raw_diffs')
+        ? jsonResponse({ error: '404 Not Found' }, {}, 404)
+        : jsonResponse([{ old_path: 'a.ts', new_path: 'a.ts', new_file: true, diff: '@@ -0,0 +1 @@\n+x\n' }])
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const text = await fetchGitLabMrRawDiff('https://gitlab.com', 'tkn', 'grp/proj', 1);
+    expect(text).toContain('+++ b/a.ts');
+    expect(String((fetchMock.mock.calls[1] as unknown[])[0])).toContain('/merge_requests/1/diffs?per_page=100');
   });
 });

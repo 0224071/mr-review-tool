@@ -68,6 +68,8 @@ interface AnalysisResultViewProps {
   // 快取與歷史紀錄
   publishedMatches?: Record<number, PublishedMatch>;
   analyzedAtLabel?: string;
+  /** 產生結果的 provider / model 標記 */
+  generatedByLabel?: string;
   hasNewCommit?: boolean;
   onReanalyze?: () => void;
 }
@@ -92,6 +94,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   onDraftEditsChange: setDraftEdits,
   publishedMatches = {},
   analyzedAtLabel,
+  generatedByLabel,
   hasNewCommit = false,
   onReanalyze,
 }) => {
@@ -292,6 +295,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
         result={result}
         hasGitLabMr={hasGitLabMr}
         analyzedAtLabel={analyzedAtLabel}
+        generatedByLabel={generatedByLabel}
       />
 
       {/* 3. Navigation Tabs and Unified Export & Publish Dropdowns */}

@@ -12,3 +12,15 @@ export function getMixedContentWarning(
   if (pageProtocol !== 'https:') return null;
   return /^\s*http:\/\//i.test(targetUrl || '') ? MIXED_CONTENT_MESSAGE : null;
 }
+
+export const LLM_MIXED_CONTENT_MESSAGE =
+  'https 網頁連 http 的模型服務（例如 http://localhost 的 Ollama）可能被瀏覽器擋下，建議改用本機 http://localhost 開啟本工具或為服務加上 https';
+
+/** 頁面為 https、模型服務 base URL 為 http 時回傳提示訊息 */
+export function getLlmMixedContentWarning(
+  baseUrl: string,
+  pageProtocol: string | undefined = globalThis.location?.protocol
+): string | null {
+  if (pageProtocol !== 'https:') return null;
+  return /^\s*http:\/\//i.test(baseUrl || '') ? LLM_MIXED_CONTENT_MESSAGE : null;
+}

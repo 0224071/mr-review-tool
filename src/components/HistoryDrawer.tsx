@@ -124,6 +124,10 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
                   <div className="text-[11px] text-muted truncate">{recordProject(r)}</div>
                   <div className="flex items-center gap-2 text-[11px] text-muted">
                     <span>{formatHistoryTime(r.analyzedAt)}</span>
+                    <span className="truncate" title="產生此結果的模型">
+                      {r.provider ?? r.result.provider ?? 'gemini'}
+                      {(r.model ?? r.result.model) ? ` · ${r.model ?? r.result.model}` : ''}
+                    </span>
                     <span className="inline-flex items-center gap-0.5">
                       <MessageSquare className="w-3 h-3" />
                       {r.result.reviews.length} 則

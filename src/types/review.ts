@@ -55,6 +55,8 @@ export interface MRReviewItem {
   newLine?: number | null;
   oldLine?: number | null;
   lineVerified?: boolean;
+  /** AI 原本給的行號；只在依 codeSnippet 修正成不同行時記錄 */
+  aiLine?: number | null;
   checklistId?: string | null;
 }
 
@@ -74,6 +76,10 @@ export interface MRAnalysisResult {
   graph: MRGraph;
   checklistCoverage?: ChecklistCoverageItem[];
   reviews: MRReviewItem[];
+  /** 產生此結果的模型供應商（舊結果沒有此欄位，視為 gemini） */
+  provider?: string;
+  /** 產生此結果的模型 id */
+  model?: string;
 }
 
 export interface WritingCheckViolation {

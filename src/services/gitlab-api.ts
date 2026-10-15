@@ -138,9 +138,9 @@ export async function fetchGitLabMrRawDiff(
   const cleanBase = baseUrl.replace(/\/$/, '');
   const encodedPath = encodeURIComponent(projectPath);
 
-  // 1. Try raw_diff endpoint first
+  // 1. Try raw_diffs endpoint first（GitLab 17.9+；單數 raw_diff 不存在，會在 console 留下 404）
   try {
-    const rawUrl = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/raw_diff`;
+    const rawUrl = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/raw_diffs`;
     const res = await gitlabFetch(rawUrl, {
       headers: {
         ...(token ? { 'PRIVATE-TOKEN': token.trim() } : {}),

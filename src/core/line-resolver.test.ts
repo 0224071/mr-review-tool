@@ -458,5 +458,76 @@ new file mode 100644
       );
       expect(result).toEqual({ newLine: 16, oldLine: null, lineVerified: false });
     });
+
+    // OpenRouter（nemotron）把同兩則意見標在 hook 開頭那行：L13 `useEffect(() => {`、L17 `useCallback(...)`；
+    // 與 Gemini 的 L16／L23（依賴陣列那行）同屬一個 hook 呼叫，兩者都應驗證通過
+    it('OpenRouter CompanyFilter L13：codeSnippet 為 useEffect 開頭行時已驗證', () => {
+      const result = resolveReviewLine(
+        {
+          file: companyFilter,
+          line: 13,
+          codeSnippet: '  useEffect(() => {',
+          comment: '`useEffect` 依賴陣列為空，當傳入的 `users` 變更時不會重新計算選項清單。',
+          suggestion: '將 `users` 加入依賴陣列。',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 13, oldLine: null, lineVerified: true });
+    });
+
+    it('OpenRouter useFavorites L17：codeSnippet 為 useCallback 開頭行時已驗證', () => {
+      const result = resolveReviewLine(
+        {
+          file: favorites,
+          line: 17,
+          codeSnippet: '  const toggleFavorite = useCallback((id: number) => {',
+          comment: '`useCallback` 缺少 `favorites` 依賴，回呼函式閉包永久捕獲初始陣列值。',
+          suggestion: '改用 `setFavorites(prev => ...)`。',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 17, oldLine: null, lineVerified: true });
+    });
+
+    it('codeSnippet 唯一命中但 AI 行號與 comment 唯一片段都指向別行時，不再單獨作證', () => {
+      // comment 談 L9 的 `JSON.parse`，AI 行號也是 9，codeSnippet 卻抄到 L17
+      const result = resolveReviewLine(
+        {
+          file: favorites,
+          line: 9,
+          codeSnippet: '  const toggleFavorite = useCallback((id: number) => {',
+          comment: '`JSON.parse` 未進行例外處理，非法 JSON 會讓頁面崩潰。',
+          suggestion: '以 try/catch 包住並回傳空陣列。',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 17, oldLine: null, lineVerified: false });
+    });
+
+    it('AI 行號偏離但沒有反證時，行號定到 codeSnippet 命中行並記錄 AI 原行號', () => {
+      const [aligned] = alignReviewsWithDiff(
+        [
+          {
+            groupId: 'g',
+            category: 'bug',
+            severity: 'high',
+            file: favorites,
+            line: 3,
+            codeSnippet: '    return raw ? JSON.parse(raw) : [];',
+            comment: '`JSON.parse` 未進行例外處理。',
+            suggestion: '',
+          } as MRReviewItem,
+        ],
+        diff
+      );
+      expect(aligned).toMatchObject({ line: 9, newLine: 9, lineVerified: true, aiLine: 3 });
+      // 再對齊一次（例如套用快取）仍保留最初的 AI 行號
+      expect(alignReviewsWithDiff([aligned], diff)[0]).toMatchObject({ line: 9, aiLine: 3 });
+    });
+
+    it('AI 行號與命中行一致時不記錄 aiLine', () => {
+      const reviews = JSON.parse(fixture('playground-mr1.gemini-reviews.json')) as MRReviewItem[];
+      for (const r of alignReviewsWithDiff(reviews, diff)) expect(r.aiLine).toBeUndefined();
+    });
   });
 });

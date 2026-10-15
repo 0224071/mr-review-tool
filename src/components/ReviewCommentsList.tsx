@@ -460,6 +460,14 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                       ) : review.lineVerified === false && (
                         <span className="text-amber-700 font-bold">:行號未驗證</span>
                       )}
+                      {review.aiLine != null && review.aiLine !== review.line && (
+                        <span
+                          className="text-slate-500 font-normal"
+                          title={`AI 原本標示 L${review.aiLine}，已依程式碼片段在 diff 中的位置修正`}
+                        >
+                          （AI 標 L{review.aiLine}）
+                        </span>
+                      )}
                       {expandedCodeIndices.has(originalIndex) ? (
                         <ChevronUp className="w-3 h-3 text-slate-400" />
                       ) : (

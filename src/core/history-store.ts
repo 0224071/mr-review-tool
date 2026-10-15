@@ -1,7 +1,8 @@
 /**
  * MR 分析結果快取與歷史紀錄（IndexedDB）
  *
- * - key：GitLab MR 用 host + project path + MR iid；手動／範例 Diff 用 diff hash
+ * - key：GitLab MR 用 host + project path + MR iid；手動／範例 Diff 用 diff hash，
+ *   再附加 provider 與 model（見 analysis-record.ts buildProviderCacheKey）；舊紀錄沒有後綴，視為 gemini
  * - 最多 50 筆、超過 30 天自動刪除，釘選的不受限（App 啟動與新增時清理）
  * - 絕不保存 Gemini API Key 或 GitLab Token：寫入前一律經過 sanitizeForStorage
  */
@@ -68,6 +69,9 @@ export interface HistoryRecord {
   /** epoch ms */
   analyzedAt: number;
   result: MRAnalysisResult;
+  /** 產生此結果的模型供應商與模型（舊紀錄沒有，視為 gemini） */
+  provider?: string;
+  model?: string;
   selectedIndices: number[];
   draftEdits: DraftEdits;
   published: PublishedRecord[];

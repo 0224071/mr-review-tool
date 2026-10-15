@@ -64,6 +64,11 @@ export function extractBacktickSnippets(comment?: string, suggestion?: string): 
  *      and did not pass backticked snippet verification, mark lineVerified = false.
  *    - A codeSnippet that exactly matches exactly one line of the file diff is strong evidence by itself;
  *      a short one (e.g. `}, []);`) additionally needs the AI line number to point at that same line.
+ *    - Exception: when the AI line number differs from the snippet line AND lands (±2) on a line holding a
+ *      backticked snippet that occurs once in the file, the AI line and the comment both point elsewhere,
+ *      so the codeSnippet alone no longer verifies the line (lineVerified = false).
+ *    - The resolved line is always the line the snippet matched, never the raw AI line number;
+ *      alignReviewsWithDiff records the AI line as `aiLine` when the two differ.
  * 6. Fallback:
  *    - If codeSnippet cannot be found anywhere in the file diff, return null lines with lineVerified = false.
  *      AI 給的行號（例如 999）未經驗證，不保留，以免被當成可信行號顯示或發布。
@@ -216,6 +221,14 @@ export function resolveReviewLine(
     return isEligibleLine(line) && anchorSnippets.some((snippet) => line.content.includes(snippet));
   };
 
+  // AI 行號附近（±2 行）是否有 comment 中唯一出現的片段
+  const aiLinePointsAtAnchor = (): boolean =>
+    fallbackLine != null &&
+    allLines.some((l) => {
+      const n = l.type === 'delete' ? l.oldLineNumber : l.newLineNumber;
+      return n != null && Math.abs(n - fallbackLine) <= 2 && lineContainsAnchorSnippet(l);
+    });
+
   let effectiveLine = candidateLine;
   let passedSnippetVerification = false;
   let lineVerifiedBase = true;
@@ -259,10 +272,12 @@ export function resolveReviewLine(
         lineVerifiedBase = true;
       } else {
         // "找不到就維持原本的結果，並把 lineVerified 標成 false。"
-        // 但 comment 常提到同一區塊其他行的 hook／函式名稱，codeSnippet 本身足以佐證時仍視為已驗證
+        // 但 comment 常提到同一區塊其他行的 hook／函式名稱，codeSnippet 本身足以佐證時仍視為已驗證；
+        // 例外：AI 行號與 comment 中唯一出現的片段都指向別處時，codeSnippet 很可能抄錯行，不能單獨作證
+        const contradicted = fallbackLine != null && !aiLineAgrees && aiLinePointsAtAnchor();
         effectiveLine = candidateLine;
-        passedSnippetVerification = snippetIsEvidence;
-        lineVerifiedBase = snippetIsEvidence;
+        passedSnippetVerification = snippetIsEvidence && !contradicted;
+        lineVerifiedBase = snippetIsEvidence && !contradicted;
       }
     }
   } else {
@@ -305,7 +320,8 @@ export function resolveReviewLine(
 
 /**
  * Aligns and enriches all reviews using parsed diff.
- * Updates review.line with the resolved line number, attaches newLine, oldLine, and lineVerified.
+ * Updates review.line with the resolved line number, attaches newLine, oldLine, and lineVerified;
+ * when the resolved line differs from the AI line number, the AI line is kept in aiLine.
  */
 export function alignReviewsWithDiff(
   reviews: MRReviewItem[],
@@ -313,13 +329,17 @@ export function alignReviewsWithDiff(
 ): MRReviewItem[] {
   return reviews.map((review) => {
     const resolved = resolveReviewLine(review, parsedDiff);
+    // 未驗證時不退回 AI 給的行號
+    const line = resolved.newLine ?? resolved.oldLine ?? (resolved.lineVerified ? review.line : null);
+    // 定位結果與 AI 行號不同時記下 AI 原本的行號（重複對齊時保留第一次的原始值）
+    const aiLine = review.aiLine ?? (review.line != null && line != null && line !== review.line ? review.line : undefined);
     return {
       ...review,
-      // 未驗證時不退回 AI 給的行號
-      line: resolved.newLine ?? resolved.oldLine ?? (resolved.lineVerified ? review.line : null),
+      line,
       newLine: resolved.newLine,
       oldLine: resolved.oldLine,
       lineVerified: resolved.lineVerified,
+      aiLine: aiLine != null && aiLine !== line ? aiLine : undefined,
     };
   });
 }

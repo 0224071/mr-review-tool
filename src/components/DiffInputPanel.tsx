@@ -27,7 +27,8 @@ interface DiffInputPanelProps {
   onLoadSampleDiff: () => void;
   onLoadSampleAnalysis: () => void;
   isLoading: boolean;
-  hasApiKey: boolean;
+  /** 目前所選模型供應商尚缺的設定（例如「尚未設定 OpenRouter API Key」）；null 表示已可分析 */
+  setupNotice: string | null;
   onOpenSettings: () => void;
 
   // GitLab Props
@@ -53,7 +54,7 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
   onAnalyze,
   onLoadSampleDiff,
   isLoading,
-  hasApiKey,
+  setupNotice,
   onOpenSettings,
   gitlabMrUrl,
   onGitlabMrUrlChange,
@@ -451,12 +452,12 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
           )}
         </button>
 
-        {/* API Key prompt: only when key is missing, single line with link */}
-        {!hasApiKey && (
+        {/* 依目前所選 provider 顯示缺少的設定，single line with link */}
+        {setupNotice && (
           <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5 flex items-center justify-between">
             <span className="flex items-center gap-1">
               <Key className="w-3 h-3 text-amber-600 shrink-0" />
-              尚未設定 Gemini API Key
+              {setupNotice}
             </span>
             <button
               type="button"
