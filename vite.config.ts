@@ -1,7 +1,6 @@
 /// <reference types="vitest/config" />
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
 import {defineConfig, type Plugin} from 'vite';
 import {configDefaults} from 'vitest/config';
 import {CSP_META} from './csp.config';
@@ -32,11 +31,6 @@ export default defineConfig(() => {
   return {
     base: resolveBase(),
     plugins: [react(), tailwindcss(), cspMetaPlugin()],
-    resolve: {
-      alias: {
-        '@': path.resolve(__dirname, '.'),
-      },
-    },
     test: {
       // e2e/ 由 Playwright 執行（npm run test:e2e），vitest 不收
       exclude: [...configDefaults.exclude, 'e2e/**'],
