@@ -1,10 +1,60 @@
-import { MRAnalysisResult } from '../types/review';
+import {
+  ChecklistCoverageItem,
+  MRAnalysisResult,
+  MRGraphEdge,
+  MRGraphNode,
+  MRGroup,
+  MRReviewItem,
+} from '../types/review';
+
+/** 只挑出指定欄位（undefined 不輸出），丟掉 schema 以外的一切 */
+function pick<T extends object, K extends keyof T>(obj: T, keys: readonly K[]): Pick<T, K> {
+  const out = {} as Pick<T, K>;
+  for (const k of keys) {
+    if (obj[k] !== undefined) out[k] = obj[k];
+  }
+  return out;
+}
+
+const RESULT_KEYS = [
+  'schemaVersion', 'title', 'description', 'summary', 'testSuggestions', 'groups', 'graph',
+  'checklistCoverage', 'reviews', 'provider', 'model',
+] as const satisfies readonly (keyof MRAnalysisResult)[];
+const GROUP_KEYS = ['id', 'name', 'summary', 'files', 'additions', 'deletions'] as const satisfies readonly (keyof MRGroup)[];
+const NODE_KEYS = ['id', 'label', 'groupId', 'kind'] as const satisfies readonly (keyof MRGraphNode)[];
+const EDGE_KEYS = ['from', 'to', 'label'] as const satisfies readonly (keyof MRGraphEdge)[];
+const COVERAGE_KEYS = ['id', 'hit', 'files'] as const satisfies readonly (keyof ChecklistCoverageItem)[];
+const REVIEW_KEYS = [
+  'groupId', 'category', 'severity', 'file', 'line', 'codeSnippet', 'comment', 'suggestion',
+  'newLine', 'oldLine', 'lineVerified', 'aiLine', 'checklistId',
+] as const satisfies readonly (keyof MRReviewItem)[];
+
+/**
+ * 匯出用的結果：只保留 MRAnalysisResult schema 欄位（白名單，逐層）。
+ * 模型回傳、MR 留言的共享分析與歷史紀錄都不會剝掉 schema 以外的欄位，
+ * 若其中夾帶 key / token（或呼叫端誤把設定、整筆紀錄傳進來），不能原樣寫進可分享的 HTML。
+ */
+export function toExportableResult(result: MRAnalysisResult): MRAnalysisResult {
+  const picked = pick(result, RESULT_KEYS);
+  return {
+    ...picked,
+    groups: (result.groups ?? []).map((g) => pick(g, GROUP_KEYS)),
+    graph: {
+      nodes: (result.graph?.nodes ?? []).map((n) => pick(n, NODE_KEYS)),
+      edges: (result.graph?.edges ?? []).map((e) => pick(e, EDGE_KEYS)),
+    },
+    ...(result.checklistCoverage ? { checklistCoverage: result.checklistCoverage.map((c) => pick(c, COVERAGE_KEYS)) } : {}),
+    reviews: (result.reviews ?? []).map((r) => pick(r, REVIEW_KEYS)),
+  };
+}
 
 /**
  * Exports a self-contained offline HTML report with embedded styles and data.
  * Zero external CDN or network dependencies, safely shareable with colleagues.
+ * 只輸出 schema 欄位（見 toExportableResult），不含任何 key / token。
  */
-export function generateOfflineHtmlReport(result: MRAnalysisResult): string {
+export function generateOfflineHtmlReport(input: MRAnalysisResult): string {
+  const result = toExportableResult(input);
   const jsonStr = JSON.stringify(result, null, 2);
 
   return `<!DOCTYPE html>
