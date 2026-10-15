@@ -7,6 +7,7 @@ import {
 } from './publish-dedup';
 import { MRReviewItem } from '../types/review';
 import { GitLabNote } from '../types/gitlab';
+import { SAMPLE_ANALYSIS_RESULT } from '../services/diff-sources/sample-analysis';
 
 const NOW = Date.UTC(2026, 9, 15);
 
@@ -119,10 +120,14 @@ describe('發布紀錄格式一致（一般留言改走 /discussions）', () => 
 });
 
 describe('defaultSelectedIndices', () => {
-  it('預設勾選：行號已驗證且未發布', () => {
+  it('預設全部不勾選（不論行號是否驗證、是否已發布）', () => {
     const reviews = [review(), review({ lineVerified: false }), review({ comment: '另一則尚未發布的意見內容' })];
-    const sel = defaultSelectedIndices(reviews, { 0: { source: 'local', publishedAt: NOW } });
-    expect(Array.from(sel)).toEqual([2]);
+    expect(defaultSelectedIndices(reviews, { 0: { source: 'local', publishedAt: NOW } }).size).toBe(0);
+    expect(defaultSelectedIndices(reviews, {}).size).toBe(0);
+  });
+
+  it('demo 範例意見預設也全部不勾選', () => {
+    expect(defaultSelectedIndices(SAMPLE_ANALYSIS_RESULT.reviews, {}).size).toBe(0);
   });
 });
 
