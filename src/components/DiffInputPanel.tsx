@@ -15,7 +15,7 @@ import {
   Key,
 } from 'lucide-react';
 import { ParsedDiff } from '../types/diff';
-import { MRAnalysisResult } from '../types/review';
+import type { StaleSharedAnalysis } from '../hooks/useAnalysis';
 import { GitLabMergeRequestInfo } from '../types/gitlab';
 import { getMixedContentWarning } from '../core/mixed-content';
 
@@ -37,8 +37,8 @@ interface DiffInputPanelProps {
   onFetchGitLabMr: (url: string) => Promise<void>;
   isFetchingGitLab: boolean;
   currentGitLabMr: GitLabMergeRequestInfo | null;
-  sharedAnalysisAvailable: { result: MRAnalysisResult; author: string; createdAt: string } | null;
-  onLoadSharedAnalysis: () => void;
+  /** MR 留言有共享報告但與 MR 目前版本不符而未載入（版本相同時會自動載入，不顯示卡片） */
+  staleSharedAnalysis: StaleSharedAnalysis | null;
   hasGitLabToken: boolean;
   gitlabError: string | null;
   batchProgress?: { current: number; total: number } | null;
@@ -61,8 +61,7 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
   onFetchGitLabMr,
   isFetchingGitLab,
   currentGitLabMr,
-  sharedAnalysisAvailable,
-  onLoadSharedAnalysis,
+  staleSharedAnalysis,
   hasGitLabToken,
   gitlabError,
   batchProgress,
@@ -253,28 +252,44 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
               </div>
             )}
 
-            {/* Shared Analysis Available Card */}
-            {sharedAnalysisAvailable && (
-              <div className="p-2.5 bg-emerald-50/70 border border-emerald-200 rounded-lg space-y-2 animate-in fade-in duration-200 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-emerald-900 flex items-center gap-1">
-                    <Users className="w-3.5 h-3.5 text-emerald-600" />
-                    已偵測到共享分析報告
+            {/* 未載入的共享報告：分析版本與 MR 目前版本不符，需重新分析 */}
+            {staleSharedAnalysis && (
+              <div
+                role="status"
+                className="p-2.5 bg-warning-subtle border border-warning-border rounded-lg space-y-1.5 animate-in fade-in duration-200 text-xs"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-warning-text flex items-center gap-1">
+                    <Users className="w-3.5 h-3.5 text-warning shrink-0" />
+                    MR 上的共享分析報告已過期，未載入
                   </span>
-                  <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-semibold">
-                    免 Key 共享
+                  <span className="text-[10px] bg-surface text-warning-text border border-warning-border px-1.5 py-0.5 rounded font-semibold shrink-0">
+                    需要重新分析
                   </span>
                 </div>
-                <p className="text-[11px] text-emerald-800">
-                  由 @{sharedAnalysisAvailable.author} 於 {new Date(sharedAnalysisAvailable.createdAt).toLocaleDateString()} 發布
+                <p className="text-[11px] text-warning-text">
+                  由 @{staleSharedAnalysis.author} 於 {new Date(staleSharedAnalysis.createdAt).toLocaleDateString()} 發布
                 </p>
-                <button
-                  type="button"
-                  onClick={onLoadSharedAnalysis}
-                  className="w-full py-1.5 bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-md text-xs font-semibold transition-colors"
-                >
-                  載入此共享報告
-                </button>
+                <p className="text-[11px] text-warning-text leading-snug">
+                  {staleSharedAnalysis.sharedHeadSha ? (
+                    <>
+                      報告分析的是{' '}
+                      <code className="font-mono">{staleSharedAnalysis.sharedHeadSha.slice(0, 8)}</code>
+                      {staleSharedAnalysis.currentHeadSha ? (
+                        <>
+                          ，MR 目前為 <code className="font-mono">{staleSharedAnalysis.currentHeadSha.slice(0, 8)}</code>
+                          （已有新的 commit）
+                        </>
+                      ) : (
+                        '，無法取得 MR 目前的版本'
+                      )}
+                      。
+                    </>
+                  ) : (
+                    '此報告由舊版工具分享，沒有記錄分析時的 commit，無法確認是否對應 MR 目前的版本。'
+                  )}
+                  請按「分析」重新分析。
+                </p>
               </div>
             )}
 

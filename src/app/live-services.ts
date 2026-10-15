@@ -35,8 +35,8 @@ export const liveGitLabGateway: GitLabGateway = {
   fetchNotes: (t) => fetchGitLabMrNotes(t.baseUrl, t.token, t.projectPath, t.mrIid),
   createNote: (t, body) => createGitLabNote(t.baseUrl, t.token, t.projectPath, t.mrIid, body),
   updateNote: (t, noteId, body) => updateGitLabNote(t.baseUrl, t.token, t.projectPath, t.mrIid, noteId, body),
-  shareAnalysis: (t, result, targetNoteId) =>
-    postSharedAnalysisToMr(t.baseUrl, t.token, t.projectPath, t.mrIid, result, targetNoteId),
+  shareAnalysis: (t, result, targetNoteId, headSha) =>
+    postSharedAnalysisToMr(t.baseUrl, t.token, t.projectPath, t.mrIid, result, targetNoteId, headSha),
   publishBatch: publishReviewBatch,
 };
 

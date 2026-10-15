@@ -4,9 +4,15 @@ import {
   createGitLabGeneralDiscussion,
   fetchGitLabMrNotes,
   fetchGitLabMrRawDiff,
+  findSharedAnalysisInNotes,
   GitLabApiError,
+  isSharedAnalysisCurrent,
+  postSharedAnalysisToMr,
+  SHARED_TAG_END,
+  SHARED_TAG_START,
   verifyGitlabToken,
 } from './gitlab-api';
+import { SAMPLE_ANALYSIS_RESULT } from './diff-sources/sample-analysis';
 import { GitLabNote } from '../types/gitlab';
 import { MIXED_CONTENT_MESSAGE } from '../core/mixed-content';
 
@@ -241,5 +247,65 @@ describe('verifyGitlabToken', () => {
 
     await expect(verifyGitlabToken('http://gitlab.example.com', 't')).rejects.toThrow(MIXED_CONTENT_MESSAGE);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('共享分析標記（headSha）', () => {
+  const FAKE_HEAD = 'FAKE-head-sha-1';
+  const FAKE_TOKEN = 'FAKE-token';
+  const sharedNote = (json: unknown, id = 7): GitLabNote => ({
+    ...note(id),
+    author: { id: 1, name: 'Ann', username: 'ann' },
+    body: `### 報告\n${SHARED_TAG_START}\n\`\`\`json\n${JSON.stringify(json, null, 2)}\n\`\`\`\n${SHARED_TAG_END}`,
+  });
+
+  /** 攔下 postSharedAnalysisToMr 送出的留言內文（不連網） */
+  async function postedBody(headSha?: string | null, targetNoteId: number | null = null) {
+    const fetchMock = vi.fn(async () => jsonResponse({ id: 99 }, {}, 201));
+    vi.stubGlobal('fetch', fetchMock);
+    await postSharedAnalysisToMr('https://gitlab.com', FAKE_TOKEN, 'a/b', 3, SAMPLE_ANALYSIS_RESULT, targetNoteId, headSha);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    return { url, init, body: JSON.parse(String(init.body)).body as string };
+  }
+
+  it('分享留言的標記 JSON 帶分析時的 headSha，解析後 result 不含 headSha', async () => {
+    const { url, init, body } = await postedBody(FAKE_HEAD);
+    expect(init.method).toBe('POST');
+    expect(new URL(url).pathname).toBe('/api/v4/projects/a%2Fb/merge_requests/3/notes');
+    expect(body).toContain(`"headSha": "${FAKE_HEAD}"`);
+
+    const shared = findSharedAnalysisInNotes([{ ...note(1), body }]);
+    expect(shared?.headSha).toBe(FAKE_HEAD);
+    expect(shared?.result).toEqual(SAMPLE_ANALYSIS_RESULT);
+    expect(shared?.result).not.toHaveProperty('headSha');
+  });
+
+  it('沒有 head sha 時不寫入 headSha 欄位；覆寫既有留言時用 PUT', async () => {
+    const { init, body } = await postedBody(null, 12);
+    expect(init.method).toBe('PUT');
+    expect(body).not.toContain('headSha');
+    expect(findSharedAnalysisInNotes([{ ...note(1), body }])?.headSha).toBeNull();
+  });
+
+  it('舊版標記（沒有 headSha）解析為 null；非字串的 headSha 也視為沒有', () => {
+    expect(findSharedAnalysisInNotes([sharedNote(SAMPLE_ANALYSIS_RESULT)])).toMatchObject({
+      noteId: 7,
+      author: 'Ann',
+      headSha: null,
+    });
+    expect(findSharedAnalysisInNotes([sharedNote({ ...SAMPLE_ANALYSIS_RESULT, headSha: 123 })])?.headSha).toBeNull();
+    expect(findSharedAnalysisInNotes([sharedNote({ ...SAMPLE_ANALYSIS_RESULT, headSha: '' })])?.headSha).toBeNull();
+  });
+
+  it('schemaVersion 不符的標記不採用', () => {
+    expect(findSharedAnalysisInNotes([sharedNote({ ...SAMPLE_ANALYSIS_RESULT, schemaVersion: 2, headSha: FAKE_HEAD })])).toBeNull();
+  });
+
+  it('isSharedAnalysisCurrent：兩邊都有且相同才算目前版本', () => {
+    expect(isSharedAnalysisCurrent({ headSha: FAKE_HEAD }, FAKE_HEAD)).toBe(true);
+    expect(isSharedAnalysisCurrent({ headSha: FAKE_HEAD }, 'FAKE-head-sha-2')).toBe(false);
+    expect(isSharedAnalysisCurrent({ headSha: null }, FAKE_HEAD)).toBe(false);
+    expect(isSharedAnalysisCurrent({ headSha: FAKE_HEAD }, null)).toBe(false);
+    expect(isSharedAnalysisCurrent({ headSha: FAKE_HEAD }, undefined)).toBe(false);
   });
 });

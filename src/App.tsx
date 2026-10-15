@@ -160,8 +160,7 @@ export default function App({ services }: { services: AppServices }) {
               onFetchGitLabMr={analysis.handleFetchGitLabMr}
               isFetchingGitLab={analysis.isFetchingGitLab}
               currentGitLabMr={analysis.currentGitLabMr}
-              sharedAnalysisAvailable={analysis.sharedAnalysisAvailable}
-              onLoadSharedAnalysis={analysis.handleLoadSharedAnalysis}
+              staleSharedAnalysis={analysis.staleSharedAnalysis}
               hasGitLabToken={gitlab.isConfigured(settingsState.settings)}
               gitlabError={analysis.gitlabError}
               batchProgress={analysis.batchProgress}
@@ -305,6 +304,22 @@ export default function App({ services }: { services: AppServices }) {
         targetLabel={gitlab.targetLabel}
         notice={gitlab.notice}
         isPublishing={publish.isPublishingInProgress}
+      />
+
+      {/* 5b. 共享分析確認：說明會新增或覆寫哪一則留言，按確認才寫入 GitLab */}
+      <PublishConfirmationModal
+        isOpen={!!publish.shareConfirm}
+        onClose={publish.cancelShareAnalysis}
+        onConfirm={publish.handleConfirmShareAnalysis}
+        mrInfo={analysis.currentGitLabMr}
+        mrUrl={publish.mrUrl}
+        itemsToPublish={[]}
+        share={publish.shareConfirm ?? undefined}
+        summaryTitle={analysis.analysisResult?.title}
+        title={gitlab.publishConfirmTitle}
+        targetLabel={gitlab.targetLabel}
+        notice={gitlab.notice}
+        isPublishing={publish.isSharingToMr}
       />
 
       {/* 6. 重複發布警告（橘色）：預設 focus「取消」，按發布類按鈕才進入原本的發布確認 */}
