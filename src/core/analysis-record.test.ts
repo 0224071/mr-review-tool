@@ -104,8 +104,8 @@ describe('buildAnalysisRecord（重新分析）', () => {
     expect(rec.headSha).toBe('h2');
     expect(rec.latestHeadSha).toBe('h2');
     expect(rec.draftEdits).toEqual({});
-    // r1（index 1）已發布 → 不勾選；r2 勾選
-    expect(rec.selectedIndices).toEqual([0]);
+    // 預設全部不勾選（#18）
+    expect(rec.selectedIndices).toEqual([]);
   });
 
   it('MR 現有留言中已發布的意見也預設不勾選', () => {

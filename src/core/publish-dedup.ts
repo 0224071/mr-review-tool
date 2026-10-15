@@ -99,16 +99,12 @@ export function findPublishedMatches(
   return matches;
 }
 
-/** 預設勾選：行號已驗證且尚未發布 */
+/** 預設勾選：一律不勾選，由使用者自行挑選要發布的意見（#18） */
 export function defaultSelectedIndices(
-  reviews: MRReviewItem[],
-  published: Record<number, PublishedMatch>
+  _reviews: MRReviewItem[],
+  _published: Record<number, PublishedMatch>
 ): Set<number> {
-  const next = new Set<number>();
-  reviews.forEach((r, idx) => {
-    if (r.lineVerified !== false && !published[idx]) next.add(idx);
-  });
-  return next;
+  return new Set<number>();
 }
 
 /**

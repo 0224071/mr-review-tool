@@ -99,6 +99,11 @@ const SEVERITY_META: Record<
   },
 };
 
+/** 單則發布與重試入口：有發布作業進行中（或此則發送中）時忽略點擊 */
+export const runUnlessPublishing = (blocked: boolean, action: () => void) => {
+  if (!blocked) action();
+};
+
 export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
   reviews,
   groups,
@@ -554,11 +559,13 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                       <button
                         type="button"
                         onClick={() =>
-                          onPublishSingle(
-                            review,
-                            draftEdits[originalIndex]?.comment,
-                            draftEdits[originalIndex]?.suggestion,
-                            originalIndex
+                          runUnlessPublishing(isSending || isPublishing, () =>
+                            onPublishSingle(
+                              review,
+                              draftEdits[originalIndex]?.comment,
+                              draftEdits[originalIndex]?.suggestion,
+                              originalIndex
+                            )
                           )
                         }
                         disabled={isSending || isPublishing}
@@ -616,8 +623,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                   </div>
                 )}
 
-                {/* Suggestion Callout (Maintained) */}
-                {!isEditing && (
+                {/* Suggestion Callout：建議為空時整段不顯示 */}
+                {!isEditing && currentDraft.suggestion.trim() !== '' && (
                   <div className="bg-primary-subtle/30 border border-primary-border/60 rounded-lg p-2.5 space-y-1">
                     <div className="flex items-center gap-1 text-[11px] font-semibold text-primary">
                       <Sparkles className="w-3.5 h-3.5" />
@@ -797,11 +804,13 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     <button
                       type="button"
                       onClick={() =>
-                        onPublishSingle(
-                          review,
-                          draftEdits[originalIndex]?.comment,
-                          draftEdits[originalIndex]?.suggestion,
-                          originalIndex
+                        runUnlessPublishing(isPublishing, () =>
+                          onPublishSingle(
+                            review,
+                            draftEdits[originalIndex]?.comment,
+                            draftEdits[originalIndex]?.suggestion,
+                            originalIndex
+                          )
                         )
                       }
                       disabled={isPublishing}

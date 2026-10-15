@@ -11,6 +11,8 @@ interface ConfirmDialogProps {
   /** 次要動作（例如「仍要全部發布」），顯示在取消與主按鈕之間 */
   secondaryLabel?: string;
   onSecondary?: () => void;
+  /** true：「取消」為主要且預設 focus 的按鈕，確認／次要動作降為次要樣式（重複發布警告） */
+  cancelIsPrimary?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -23,10 +25,16 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   danger = false,
   secondaryLabel,
   onSecondary,
+  cancelIsPrimary = false,
   onConfirm,
   onCancel,
 }) => {
   if (!open) return null;
+  const secondaryClass =
+    'px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark border border-surface-border hover:bg-surface-muted';
+  const primaryClass = `px-3 py-1.5 rounded-lg text-xs font-semibold text-surface ${
+    danger ? 'bg-danger hover:bg-danger-hover' : 'bg-gitlab hover:bg-gitlab-hover'
+  }`;
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-overlay/40 p-4"
@@ -52,8 +60,13 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         <div className="flex justify-end gap-2 pt-1">
           <button
             type="button"
+            autoFocus={cancelIsPrimary}
             onClick={onCancel}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark hover:bg-surface-muted"
+            className={
+              cancelIsPrimary
+                ? primaryClass
+                : 'px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark hover:bg-surface-muted'
+            }
           >
             取消
           </button>
@@ -61,18 +74,16 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             <button
               type="button"
               onClick={onSecondary}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark border border-surface-border hover:bg-surface-muted"
+              className={secondaryClass}
             >
               {secondaryLabel}
             </button>
           )}
           <button
             type="button"
-            autoFocus
+            autoFocus={!cancelIsPrimary}
             onClick={onConfirm}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold text-surface ${
-              danger ? 'bg-danger hover:bg-danger-hover' : 'bg-gitlab hover:bg-gitlab-hover'
-            }`}
+            className={cancelIsPrimary ? secondaryClass : primaryClass}
           >
             {confirmLabel}
           </button>
