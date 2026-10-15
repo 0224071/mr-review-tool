@@ -5,6 +5,7 @@ import {
   fetchGitLabMrNotes,
   fetchGitLabMrRawDiff,
   GitLabApiError,
+  verifyGitlabToken,
 } from './gitlab-api';
 import { GitLabNote } from '../types/gitlab';
 import { MIXED_CONTENT_MESSAGE } from '../core/mixed-content';
@@ -169,5 +170,76 @@ describe('fetchGitLabMrRawDiff', () => {
     const text = await fetchGitLabMrRawDiff('https://gitlab.com', 'tkn', 'grp/proj', 1);
     expect(text).toContain('+++ b/a.ts');
     expect(String((fetchMock.mock.calls[1] as unknown[])[0])).toContain('/merge_requests/1/diffs?per_page=100');
+  });
+});
+
+describe('verifyGitlabToken', () => {
+  it('成功時回傳使用者資訊，並以 PRIVATE-TOKEN 呼叫 /api/v4/user', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      jsonResponse({ id: 42, username: 'dragon', name: 'Dragon', email: 'x@example.com' })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = await verifyGitlabToken('https://gitlab.example.com', ' tkn ');
+
+    expect(user).toEqual({ id: 42, username: 'dragon', name: 'Dragon' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://gitlab.example.com/api/v4/user');
+    expect((init?.headers as Record<string, string>)['PRIVATE-TOKEN']).toBe('tkn');
+  });
+
+  it('去除 Base URL 尾端斜線（含多個），留空時預設 https://gitlab.com', async () => {
+    const fetchMock = vi.fn(async (_url: string) => jsonResponse({ id: 1, username: 'u', name: 'n' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await verifyGitlabToken('https://gitlab.example.com/', 't');
+    await verifyGitlabToken('https://gitlab.example.com//', 't');
+    await verifyGitlabToken('  ', 't');
+
+    expect(fetchMock.mock.calls.map(([u]) => u)).toEqual([
+      'https://gitlab.example.com/api/v4/user',
+      'https://gitlab.example.com/api/v4/user',
+      'https://gitlab.com/api/v4/user',
+    ]);
+  });
+
+  it('401 時拋出 GitLabApiError 並說明 Token 無效或過期', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ message: '401 Unauthorized' }, {}, 401)));
+
+    const err = await verifyGitlabToken('https://gitlab.com', 'bad').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GitLabApiError);
+    expect((err as GitLabApiError).status).toBe(401);
+    expect((err as Error).message).toMatch(/無效或已過期/);
+  });
+
+  it('其他非 2xx 狀態帶出 status', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({}, {}, 500)));
+
+    await expect(verifyGitlabToken('https://gitlab.com', 't')).rejects.toThrow('GitLab 連線失敗 (500)');
+  });
+
+  it('網路錯誤（fetch reject，例如 CORS）轉成可讀的連線失敗訊息', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+
+    await expect(verifyGitlabToken('https://gitlab.com', 't')).rejects.toThrow(/無法連線至 GitLab/);
+  });
+
+  it('未填 Token 時不送出請求', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(verifyGitlabToken('https://gitlab.com', '  ')).rejects.toThrow('請先填入 Personal Access Token');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('https 頁面連 http GitLab 時直接回報混合內容，不送出請求', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('location', { protocol: 'https:' });
+
+    await expect(verifyGitlabToken('http://gitlab.example.com', 't')).rejects.toThrow(MIXED_CONTENT_MESSAGE);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

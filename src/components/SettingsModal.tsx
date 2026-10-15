@@ -15,6 +15,7 @@ import { getLlmMixedContentWarning, getMixedContentWarning } from '../core/mixed
 import { getProviderSettings, setProviderSettings } from '../core/settings-store';
 import { createProvider, PROVIDER_META } from '../providers/registry';
 import { describeOpenRouterCredit } from '../providers/openai-compatible';
+import { verifyGitlabToken } from '../services/gitlab-api';
 import { ModelInfo, OpenRouterKeyInfo, PROVIDER_IDS, ProviderId, ProviderSettings } from '../providers/types';
 
 interface SettingsModalProps {
@@ -145,21 +146,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
     setGitlabTestStatus({ state: 'testing', message: '連線驗證中...' });
     try {
-      const cleanBase = (draft.gitlabBaseUrl.trim() || 'https://gitlab.com').replace(/\/$/, '');
-      const res = await fetch(`${cleanBase}/api/v4/user`, {
-        headers: {
-          'Content-Type': 'application/json',
-          'PRIVATE-TOKEN': draft.gitlabToken.trim(),
-        },
-      });
-      if (res.ok) {
-        const user = await res.json();
-        setGitlabTestStatus({ state: 'success', message: `驗證成功！已連接帳號 @${user.username} (${user.name})` });
-      } else {
-        setGitlabTestStatus({ state: 'error', message: `連線失敗 (${res.status})：Token 無效或無權限` });
-      }
-    } catch {
-      setGitlabTestStatus({ state: 'error', message: '連線失敗：請檢查 Base URL 與網路' });
+      const user = await verifyGitlabToken(draft.gitlabBaseUrl, draft.gitlabToken);
+      setGitlabTestStatus({ state: 'success', message: `驗證成功！已連接帳號 @${user.username} (${user.name})` });
+    } catch (err: unknown) {
+      setGitlabTestStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) });
     }
   };
 
