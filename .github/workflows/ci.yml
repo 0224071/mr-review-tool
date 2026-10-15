@@ -25,6 +25,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx tsc --noEmit
+      # ESLint：error 會讓此步驟失敗，warning 只列出不擋
+      - run: npm run lint
       - run: npx vitest run
 
   e2e:

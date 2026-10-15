@@ -341,7 +341,7 @@ export async function createGitLabDiscussion(
       const parsed = JSON.parse(errorBody);
       errorMsg = parsed.message || errorBody;
     } catch {
-      // ignore
+      // 錯誤 body 不是 JSON：直接用原始文字當錯誤訊息
     }
     throw new GitLabApiError(`發布 Discussion 失敗 (${res.status})：${errorMsg}`, res.status);
   }

@@ -46,8 +46,9 @@ export function useHistory({
     if (!store) return;
     try {
       setHistoryRecords(await store.list());
-    } catch {
-      // ignore
+    } catch (err) {
+      // 讀取失敗時保留目前清單，不中斷操作
+      console.warn('讀取分析紀錄失敗，保留目前清單:', err);
     }
   }, [historyStore]);
 
