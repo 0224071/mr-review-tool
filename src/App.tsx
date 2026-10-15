@@ -55,6 +55,7 @@ import {
   SUMMARY_TAG,
 } from './services/gitlab-api';
 import { PublishTarget } from './services/review-publisher';
+import { resolveEffectiveSuggestion } from './core/review-text';
 import { AppServices, withNotice } from './app/app-services';
 import { SetupGuide } from './components/SetupGuide';
 import { AlertCircle, DatabaseZap, FlaskConical, Info, Sparkles } from 'lucide-react';
@@ -780,7 +781,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
             index: item.index,
             review: item.review,
             comment: item.customComment || item.review.comment,
-            suggestion: item.customSuggestion || item.review.suggestion,
+            suggestion: resolveEffectiveSuggestion(item.customSuggestion, item.review.suggestion),
           })),
           diffRefs,
           {
@@ -803,7 +804,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                   markPublished(
                     item,
                     item.customComment || item.review.comment,
-                    item.customSuggestion || item.review.suggestion,
+                    resolveEffectiveSuggestion(item.customSuggestion, item.review.suggestion),
                     result.discussionId
                   );
                 }
