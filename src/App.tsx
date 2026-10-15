@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { Header } from './components/Header';
 import { DiffInputPanel } from './components/DiffInputPanel';
 import { AnalysisResultView } from './components/AnalysisResultView';
-import { SettingsModal } from './components/SettingsModal';
 import { DiffViewerModal } from './components/DiffViewerModal';
 import { PublishConfirmationModal } from './components/PublishConfirmationModal';
 import { HistoryDrawer } from './components/HistoryDrawer';
@@ -17,7 +16,6 @@ import {
   HistorySourceType,
   HistoryStore,
   normalizeHost,
-  openHistoryStore,
   PublishedRecord,
 } from './core/history-store';
 import {
@@ -32,18 +30,11 @@ import {
   recordKeyForResult,
   shouldServeFromCache,
 } from './core/analysis-record';
-import {
-  clearProviderKey,
-  getProviderSettings,
-  getProviderSetupNotice,
-  loadSettings,
-  saveSettings,
-  setProviderSettings,
-} from './core/settings-store';
+import { getProviderSettings, setProviderSettings } from './core/settings-store';
 import { enrichGroupsWithParsedDiff, parseGitDiff } from './core/diff-parser';
 import { alignReviewsWithDiff, dropUnverifiedFallbackLines } from './core/line-resolver';
 import { analyzeGitDiff } from './services/review-service';
-import { createProvider, PROVIDER_META } from './providers/registry';
+import { PROVIDER_META } from './providers/registry';
 import { ProviderId } from './providers/types';
 import { OPENROUTER_SUGGESTED_FREE_MODEL, shouldSuggestFreeModel } from './providers/openai-compatible';
 import { SAMPLE_GIT_DIFF } from './services/diff-sources/sample-diffs';
@@ -58,20 +49,16 @@ import {
   ReviewPublishState,
 } from './types/gitlab';
 import {
-  createGitLabNote,
-  fetchGitLabMergeRequest,
-  fetchGitLabMrNotes,
-  fetchGitLabMrRawDiff,
   findExistingOverallNote,
   findSharedAnalysisInNotes,
   parseGitLabMrUrl,
-  postSharedAnalysisToMr,
   SUMMARY_TAG,
-  updateGitLabNote,
 } from './services/gitlab-api';
-import { publishReviewBatch } from './services/review-publisher';
+import { PublishTarget } from './services/review-publisher';
 import { filterPublishableItems, resolveEffectiveComment, resolveEffectiveSuggestion } from './core/review-text';
-import { AlertCircle, DatabaseZap, Info, Sparkles } from 'lucide-react';
+import { AppServices, withNotice } from './app/app-services';
+import { SetupGuide } from './components/SetupGuide';
+import { AlertCircle, DatabaseZap, FlaskConical, Info, Sparkles } from 'lucide-react';
 
 type PublishItem = {
   review: MRReviewItem;
@@ -87,10 +74,14 @@ function formatGeneratedBy(result: MRAnalysisResult): string | undefined {
   return result.model ? `${label} · ${result.model}` : label;
 }
 
-export default function App() {
-  // Load settings from localStorage
-  const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
-  const providerSetupNotice = getProviderSetupNotice(settings);
+/**
+ * 主畫面。設定儲存、AI、GitLab 與歷史紀錄都由 services 注入（正式版或示範模式），App 本身不分辨模式。
+ */
+export default function App({ services }: { services: AppServices }) {
+  const { settings: settingsGateway, ai, gitlab } = services;
+  const SettingsDialog = settingsGateway.Dialog;
+  const [settings, setSettings] = useState<AppSettings>(() => settingsGateway.load());
+  const providerSetupNotice = ai.setupNotice(settings);
   const providerReady = providerSetupNotice === null;
   /** 目前所選 provider / model，作為快取 key 的一部分 */
   const currentProviderModel = {
@@ -98,7 +89,7 @@ export default function App() {
     model: getProviderSettings(settings).model.trim(),
   };
 
-  const [rawDiff, setRawDiff] = useState<string>('');
+  const [rawDiff, setRawDiff] = useState<string>(services.initialRawDiff);
   const [analysisResult, setAnalysisResult] = useState<MRAnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
@@ -107,6 +98,8 @@ export default function App() {
   const [freeModelSuggestedFor, setFreeModelSuggestedFor] = useState<string | null>(null);
   const suggestFreeModel = errorMessage !== null && freeModelSuggestedFor === errorMessage;
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  /** 尚未設定金鑰就按「分析」時顯示的引導 */
+  const [isSetupGuideOpen, setIsSetupGuideOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [inspectingDiff, setInspectingDiff] = useState<{ file: DiffFile; line?: number | null } | null>(null);
 
@@ -157,6 +150,8 @@ export default function App() {
   // 產生目前結果的 diff 與 diff_refs（可能與左欄最新抓取的 diff 不同，例如 MR 有新 commit）
   const [resultRawDiff, setResultRawDiff] = useState<string>('');
   const [resultDiffRefs, setResultDiffRefs] = useState<GitLabDiffRefs | undefined>(undefined);
+  // 發布時使用的 diff_refs：結果產生時的版本 → 目前 MR → 服務提供的備用版本（示範模式）
+  const publishDiffRefs = resultDiffRefs ?? currentGitLabMr?.diff_refs ?? gitlab.fallbackDiffRefs;
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const [draftEdits, setDraftEdits] = useState<DraftEdits>({});
   const [publishedRecords, setPublishedRecords] = useState<PublishedRecord[]>([]);
@@ -195,7 +190,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const store = await openHistoryStore();
+      const store = await services.openHistoryStore();
       if (cancelled) return;
       if (!store) {
         setHistoryAvailable(false);
@@ -341,10 +336,9 @@ export default function App() {
     if (!historyStore) setCurrentRecordId(null);
   };
 
-  // Persist settings（只存在此瀏覽器 localStorage）
   const handleSaveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings);
-    saveSettings(newSettings);
+    settingsGateway.save(newSettings);
   };
 
   /** 402 額度不足後一鍵改用 OpenRouter 免費模型（使用者明確點選才切換，不自動 fallback） */
@@ -354,24 +348,29 @@ export default function App() {
     setInfoMessage(`已改用 OpenRouter 免費模型 ${OPENROUTER_SUGGESTED_FREE_MODEL}，請再按一次「分析」。免費模型有請求次數上限。`);
   };
 
-  /** 「清除 key」：立即從 localStorage 移除該 provider 的金鑰 */
+  /** 「清除 key」：立即移除該 provider 的金鑰 */
   const handleClearProviderKey = (id: ProviderId) => {
-    setSettings(clearProviderKey(settings, id));
+    setSettings(settingsGateway.clearKey(settings, id));
+  };
+
+  const openSettingsFromGuide = () => {
+    setIsSetupGuideOpen(false);
+    setIsSettingsOpen(true);
   };
 
   const runAnalysis = async (diffText: string, mr: GitLabMergeRequestInfo | null) => {
     if (!providerReady) {
-      setIsSettingsOpen(true);
+      setIsSetupGuideOpen(true);
       return;
     }
 
+    setIsSetupGuideOpen(false);
     setIsLoading(true);
     setBatchProgress(null);
     setErrorMessage(null);
 
     try {
-      // 只呼叫使用者所選的 provider，失敗時不自動改用其他家
-      const provider = createProvider(settings.llmProvider, getProviderSettings(settings));
+      const provider = ai.createProvider(settings);
       const result = await analyzeGitDiff({
         rawDiff: diffText,
         provider,
@@ -427,7 +426,7 @@ export default function App() {
       return;
     }
     if (!providerReady) {
-      setIsSettingsOpen(true);
+      setIsSetupGuideOpen(true);
       return;
     }
     setIsFetchingGitLab(true);
@@ -435,9 +434,9 @@ export default function App() {
     let latestMr: GitLabMergeRequestInfo;
     let latestDiff: string;
     try {
-      const { baseUrl, projectPath, mrIid } = parseGitLabMrUrl(mrUrl, settings.gitlabBaseUrl || 'https://gitlab.com');
-      latestMr = await fetchGitLabMergeRequest(baseUrl, settings.gitlabToken, projectPath, mrIid);
-      latestDiff = await fetchGitLabMrRawDiff(baseUrl, settings.gitlabToken, projectPath, mrIid);
+      const target = gitlab.resolveTarget(mrUrl, settings);
+      latestMr = await gitlab.fetchMergeRequest(target);
+      latestDiff = await gitlab.fetchRawDiff(target);
       setCurrentGitLabMr(latestMr);
       setGitlabMrUrl(latestMr.web_url);
       setRawDiff(latestDiff);
@@ -469,14 +468,8 @@ export default function App() {
 
     if (record.sourceType !== 'gitlab' || !record.mrUrl) return;
     try {
-      const { baseUrl, projectPath, mrIid } = parseGitLabMrUrl(
-        record.mrUrl,
-        settings.gitlabBaseUrl || 'https://gitlab.com'
-      );
-      const [latestMr, notes] = await Promise.all([
-        fetchGitLabMergeRequest(baseUrl, settings.gitlabToken, projectPath, mrIid),
-        fetchGitLabMrNotes(baseUrl, settings.gitlabToken, projectPath, mrIid),
-      ]);
+      const target = gitlab.resolveTarget(record.mrUrl, settings);
+      const [latestMr, notes] = await Promise.all([gitlab.fetchMergeRequest(target), gitlab.fetchNotes(target)]);
       if (currentRecordIdRef.current !== id) return;
       setRemoteNotes(notes);
       const latestHead = latestMr.diff_refs?.head_sha ?? null;
@@ -517,33 +510,21 @@ export default function App() {
     setSharedAnalysisAvailable(null);
 
     try {
-      const { baseUrl, projectPath, mrIid } = parseGitLabMrUrl(
-        url,
-        settings.gitlabBaseUrl || 'https://gitlab.com'
-      );
+      const target = gitlab.resolveTarget(url, settings);
+      const { baseUrl, projectPath, mrIid } = target;
 
       // 1. Fetch MR info
-      const mrInfo = await fetchGitLabMergeRequest(
-        baseUrl,
-        settings.gitlabToken,
-        projectPath,
-        mrIid
-      );
+      const mrInfo = await gitlab.fetchMergeRequest(target);
       setCurrentGitLabMr(mrInfo);
 
       // 2. Fetch Raw Diff
-      const fetchedDiff = await fetchGitLabMrRawDiff(
-        baseUrl,
-        settings.gitlabToken,
-        projectPath,
-        mrIid
-      );
+      const fetchedDiff = await gitlab.fetchRawDiff(target);
       setRawDiff(fetchedDiff);
 
       // 3. Check for previously shared analysis in notes（同時保留留言供重複發布比對）
       let notes: GitLabNote[] = [];
       try {
-        notes = await fetchGitLabMrNotes(baseUrl, settings.gitlabToken, projectPath, mrIid);
+        notes = await gitlab.fetchNotes(target);
         const shared = findSharedAnalysisInNotes(notes);
         if (shared) {
           setSharedAnalysisAvailable(shared);
@@ -645,7 +626,7 @@ export default function App() {
    * 發布前比對本地發布紀錄＋MR 現有留言；有重複時先跳橘色警告，按「仍要發布」才進原本的發布確認。
    */
   const requestPublishReviews = async (requested: PublishItem[]) => {
-    if (!settings.gitlabToken) {
+    if (!gitlab.isConfigured(settings)) {
       setIsSettingsOpen(true);
       return;
     }
@@ -658,18 +639,14 @@ export default function App() {
     if (items.length === 0) return;
 
     let notes = remoteNotes;
-    const targetMrUrl = currentGitLabMr?.web_url || gitlabMrUrl;
-    if (targetMrUrl) {
-      try {
-        const parsed = parseGitLabMrUrl(targetMrUrl, settings.gitlabBaseUrl || 'https://gitlab.com');
-        const fresh = await fetchGitLabMrNotes(parsed.baseUrl, settings.gitlabToken, parsed.projectPath, parsed.mrIid);
-        if (fresh.length > 0) {
-          notes = fresh;
-          setRemoteNotes(fresh);
-        }
-      } catch {
-        // 讀不到留言時只用本地紀錄與先前讀到的留言比對
+    try {
+      const fresh = await gitlab.fetchNotes(gitlab.resolveTarget(currentGitLabMr?.web_url || gitlabMrUrl, settings));
+      if (fresh.length > 0) {
+        notes = fresh;
+        setRemoteNotes(fresh);
       }
+    } catch {
+      // 沒有目標 MR 或讀不到留言時，只用本地紀錄與先前讀到的留言比對
     }
 
     const drafts: DraftEdits = { ...draftEdits };
@@ -716,7 +693,7 @@ export default function App() {
 
   // Stage 2: Publish General Summary to MR Note Trigger
   const handlePublishSummaryToMr = () => {
-    if (!settings.gitlabToken) {
+    if (!gitlab.isConfigured(settings)) {
       setIsSettingsOpen(true);
       return;
     }
@@ -748,16 +725,9 @@ export default function App() {
 
   // Stage 2: Confirm and Execute Publishing (Discussions API or Notes API)
   const handleConfirmPublish = async () => {
-    const targetMrUrl = currentGitLabMr?.web_url || gitlabMrUrl;
-    if (!targetMrUrl) {
-      setErrorMessage('請先輸入或指定目標 GitLab MR 網址');
-      setIsPublishModalOpen(false);
-      return;
-    }
-
-    let parsedUrl;
+    let target: PublishTarget;
     try {
-      parsedUrl = parseGitLabMrUrl(targetMrUrl, settings.gitlabBaseUrl || 'https://gitlab.com');
+      target = gitlab.resolveTarget(currentGitLabMr?.web_url || gitlabMrUrl, settings);
     } catch (e: unknown) {
       setErrorMessage(e instanceof Error ? e.message : '無效的 GitLab MR 網址');
       setIsPublishModalOpen(false);
@@ -772,12 +742,7 @@ export default function App() {
         if (!analysisResult) return;
 
         // 4. 整體留言去重：送出「整體摘要」前，先讀取 MR notes
-        const notes = await fetchGitLabMrNotes(
-          parsedUrl.baseUrl,
-          settings.gitlabToken,
-          parsedUrl.projectPath,
-          parsedUrl.mrIid
-        );
+        const notes = await gitlab.fetchNotes(target);
         const { sharedNote, summaryNote } = findExistingOverallNote(notes);
 
         if (sharedNote) {
@@ -807,46 +772,28 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
 *由 GitLab MR 講解與審查工具自動發布*`;
 
         if (summaryNote) {
-          await updateGitLabNote(
-            parsedUrl.baseUrl,
-            settings.gitlabToken,
-            parsedUrl.projectPath,
-            parsedUrl.mrIid,
-            summaryNote.id,
-            summaryBody
-          );
+          await gitlab.updateNote(target, summaryNote.id, summaryBody);
         } else {
-          await createGitLabNote(
-            parsedUrl.baseUrl,
-            settings.gitlabToken,
-            parsedUrl.projectPath,
-            parsedUrl.mrIid,
-            summaryBody
-          );
+          await gitlab.createNote(target, summaryBody);
         }
 
         setIsSummaryPublished(true);
+        setInfoMessage(withNotice('已發布整體摘要。', gitlab.notice));
       } else {
         // Publish Review Items via Discussions API
         // 使用產生目前結果時的 diff_refs，行號才會對到同一個版本
-        const diffRefs = resultDiffRefs ?? currentGitLabMr?.diff_refs;
 
         const items = publishModalConfig.itemsToPublish;
         const byIndex = new Map(items.map((item) => [item.index, item]));
-        const outcomes = await publishReviewBatch(
-          {
-            baseUrl: parsedUrl.baseUrl,
-            token: settings.gitlabToken,
-            projectPath: parsedUrl.projectPath,
-            mrIid: parsedUrl.mrIid,
-          },
+        const outcomes = await gitlab.publishBatch(
+          target,
           items.map((item) => ({
             index: item.index,
             review: item.review,
             comment: publishCommentFor(item),
             suggestion: resolveEffectiveSuggestion(item.customSuggestion, item.review.suggestion),
           })),
-          diffRefs,
+          publishDiffRefs,
           {
             onStart: (index) => setPublishStates((prev) => ({ ...prev, [index]: { status: 'sending' } })),
             onDone: (outcome) => {
@@ -859,6 +806,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                     discussionId: result.discussionId,
                     mode: result.mode,
                     fallbackReason: result.fallbackReason,
+                    notice: result.notice,
                   },
                 }));
                 const item = byIndex.get(outcome.index);
@@ -882,9 +830,12 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         const failed = outcomes.filter((o) => !o.ok).length;
         if (outcomes.length > 1 || failed > 0) {
           setInfoMessage(
-            failed > 0
-              ? `已發布 ${outcomes.length - failed} 則，失敗 ${failed} 則；失敗的項目可在清單中按「重試」。`
-              : `已發布 ${outcomes.length} 則審查意見。`
+            withNotice(
+              failed > 0
+                ? `已發布 ${outcomes.length - failed} 則，失敗 ${failed} 則；失敗的項目可在清單中按「重試」。`
+                : `已發布 ${outcomes.length} 則審查意見。`,
+              gitlab.notice
+            )
           );
         }
       }
@@ -901,44 +852,30 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
   // Stage 2: Mechanism 1 - Post complete analysis JSON back to MR note
   const handleShareAnalysisToMr = async () => {
     if (!analysisResult) return;
-    const targetMrUrl = currentGitLabMr?.web_url || gitlabMrUrl;
-    if (!targetMrUrl) {
+    let target: PublishTarget;
+    try {
+      target = gitlab.resolveTarget(currentGitLabMr?.web_url || gitlabMrUrl, settings);
+    } catch {
       setErrorMessage('請先提供目標 GitLab MR 網址以發布共享報告');
       return;
     }
 
-    if (!settings.gitlabToken) {
+    if (!gitlab.isConfigured(settings)) {
       setIsSettingsOpen(true);
       return;
     }
 
     setIsSharingToMr(true);
     try {
-      const parsedUrl = parseGitLabMrUrl(
-        targetMrUrl,
-        settings.gitlabBaseUrl || 'https://gitlab.com'
-      );
-
       // 4. 整體留言去重：若使用者先發整體摘要、後發分享報告，分享報告改為更新既有的摘要留言，讓 MR 上只保留一則整體留言
-      const notes = await fetchGitLabMrNotes(
-        parsedUrl.baseUrl,
-        settings.gitlabToken,
-        parsedUrl.projectPath,
-        parsedUrl.mrIid
-      );
+      const notes = await gitlab.fetchNotes(target);
       const { sharedNote, summaryNote } = findExistingOverallNote(notes);
       const targetNoteId = sharedNote ? sharedNote.id : summaryNote ? summaryNote.id : null;
 
-      await postSharedAnalysisToMr(
-        parsedUrl.baseUrl,
-        settings.gitlabToken,
-        parsedUrl.projectPath,
-        parsedUrl.mrIid,
-        analysisResult,
-        targetNoteId
-      );
+      await gitlab.shareAnalysis(target, analysisResult, targetNoteId);
       setIsSharedToMrPublished(true);
       setIsSummaryPublished(true);
+      setInfoMessage(withNotice('已共享分析報告。', gitlab.notice));
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : '分享報告至 MR 留言失敗');
     } finally {
@@ -958,6 +895,8 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
 
       {/* 2. Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+        {services.banner}
+
         {historyAvailable === false && (
           <p className="mb-3 text-xs text-muted flex items-center gap-1.5">
             <DatabaseZap className="w-3.5 h-3.5 text-muted-light" />
@@ -987,6 +926,15 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
               ✕
             </button>
           </div>
+        )}
+
+        {isSetupGuideOpen && (
+          <SetupGuide
+            notice={providerSetupNotice}
+            onTryDemo={services.onTryDemo}
+            onOpenSettings={openSettingsFromGuide}
+            onClose={() => setIsSetupGuideOpen(false)}
+          />
         )}
 
         {/* Error notification banner if any */}
@@ -1032,7 +980,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         {/* Two-Column Responsive Workspace */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Left Column: Diff Input & Controls (5 cols on lg) */}
-          <div className="lg:col-span-5 h-auto max-h-[calc(100vh-100px)] sticky top-20 overflow-y-auto">
+          <div className="lg:col-span-5 h-auto lg:max-h-[calc(100vh-100px)] lg:sticky lg:top-20 lg:overflow-y-auto">
             <DiffInputPanel
               rawDiff={rawDiff}
               onDiffChange={setRawDiff}
@@ -1051,7 +999,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
               currentGitLabMr={currentGitLabMr}
               sharedAnalysisAvailable={sharedAnalysisAvailable}
               onLoadSharedAnalysis={handleLoadSharedAnalysis}
-              hasGitLabToken={!!settings.gitlabToken}
+              hasGitLabToken={gitlab.isConfigured(settings)}
               gitlabError={gitlabError}
               batchProgress={batchProgress}
               hasResult={!!analysisResult}
@@ -1110,13 +1058,15 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                 onPublishBatchReviews={handlePublishBatchReviews}
                 publishStates={publishStates}
                 isPublishing={isPublishingInProgress}
-                isGitLabConfigured={!!settings.gitlabToken}
+                isGitLabConfigured={gitlab.isConfigured(settings)}
                 onPublishSummaryToMr={handlePublishSummaryToMr}
                 onShareAnalysisToMr={handleShareAnalysisToMr}
                 isSharingToMr={isSharingToMr}
                 isSummaryPublished={isSummaryPublished}
                 isSharedToMrPublished={isSharedToMrPublished}
                 mrUrl={currentGitLabMr?.web_url || gitlabMrUrl}
+                publishTargetLabel={gitlab.targetLabel}
+                publishNotice={gitlab.notice}
                 selectedIndices={selectedIndices}
                 onSelectedIndicesChange={setSelectedIndices}
                 draftEdits={draftEdits}
@@ -1130,7 +1080,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                 onReanalyze={handleReanalyze}
               />
             ) : (
-              <div className="bg-surface rounded-xl border border-surface-border p-12 text-center shadow-xs space-y-4">
+              <div className="bg-surface rounded-xl border border-surface-border p-6 sm:p-12 text-center shadow-xs space-y-4">
                 <div className="w-16 h-16 rounded-2xl bg-primary-subtle text-primary flex items-center justify-center mx-auto shadow-inner">
                   <Sparkles className="w-8 h-8" />
                 </div>
@@ -1138,9 +1088,18 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                   <h3 className="text-base font-bold text-slate-800">
                     準備進行 MR 講解與結構審查
                   </h3>
-                  <p className="text-xs text-muted leading-relaxed">
-                    在輸入區填入 GitLab MR 網址抓取，或貼上 git diff；點擊「分析」開始。
-                  </p>
+                  <p className="text-xs text-muted leading-relaxed">{services.homeHint}</p>
+                </div>
+                <div className="pt-2 space-y-1.5">
+                  <button
+                    type="button"
+                    onClick={services.onTryDemo}
+                    className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-5 py-2.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm font-semibold shadow-xs transition-colors"
+                  >
+                    <FlaskConical className="w-4 h-4" />
+                    用範例試試看
+                  </button>
+                  <p className="text-[11px] text-muted-light">不需要金鑰，不會連到 AI 或 GitLab</p>
                 </div>
               </div>
             )}
@@ -1149,7 +1108,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
       </main>
 
       {/* 3. Settings Modal */}
-      <SettingsModal
+      <SettingsDialog
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
@@ -1174,9 +1133,11 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         mrInfo={currentGitLabMr}
         mrUrl={currentGitLabMr?.web_url || gitlabMrUrl}
         itemsToPublish={publishModalConfig.itemsToPublish}
-        diffRefs={resultDiffRefs ?? currentGitLabMr?.diff_refs}
+        diffRefs={publishDiffRefs}
         isPublishingSummary={publishModalConfig.isPublishingSummary}
         summaryTitle={analysisResult?.title}
+        targetLabel={gitlab.targetLabel}
+        notice={gitlab.notice}
         isPublishing={isPublishingInProgress}
       />
 

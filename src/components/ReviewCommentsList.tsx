@@ -435,7 +435,8 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
               >
                 {/* Single Row: Checkbox, Severity, File:Line, and Comment */}
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2 flex-1 min-w-0">
+                  {/* 手機寬度時換行，意見文字獨佔一行 */}
+                  <div className="flex flex-wrap sm:flex-nowrap items-start gap-2 flex-1 min-w-0">
                     {/* Item Checkbox */}
                     <button
                       type="button"
@@ -478,11 +479,11 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     <button
                       type="button"
                       onClick={() => toggleCodeExpanded(originalIndex)}
-                      className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-600 bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded border border-slate-200 transition-colors shrink-0 mt-0.5 cursor-pointer"
+                      className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-600 bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded border border-slate-200 transition-colors shrink-0 max-w-full mt-0.5 cursor-pointer"
                       title={expandedCodeIndices.has(originalIndex) ? '收合程式碼片段' : '展開前後 5 行程式碼片段'}
                     >
                       <FileCode className="w-3 h-3 text-slate-500" />
-                      <span className="font-semibold text-slate-800">{review.file}</span>
+                      <span className="font-semibold text-slate-800 truncate min-w-0">{review.file}</span>
                       {review.line !== null ? (
                         <span className="text-primary font-bold">:L{review.line}</span>
                       ) : review.lineVerified === false && (
@@ -505,7 +506,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
 
                     {/* Comment text */}
                     {!isEditing && (
-                      <span className="text-slate-800 font-medium leading-relaxed pl-1">
+                      <span className="basis-full sm:basis-auto text-slate-800 font-medium leading-relaxed sm:pl-1 break-words">
                         {currentDraft.comment}
                       </span>
                     )}
@@ -815,6 +816,12 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     >
                       <AlertTriangle className="w-3 h-3 text-warning shrink-0" />
                       <span>{pubState.fallbackReason}</span>
+                    </span>
+                  )}
+
+                  {pubState?.status === 'published' && pubState.notice && (
+                    <span className="px-1.5 py-0.5 rounded font-semibold bg-warning-subtle text-warning-text border border-warning-border">
+                      {pubState.notice}
                     </span>
                   )}
 

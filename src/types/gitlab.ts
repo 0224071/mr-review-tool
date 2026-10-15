@@ -80,6 +80,8 @@ export interface ReviewPublishState {
   mode?: 'inline' | 'general' | 'stale-fallback';
   /** 行內留言失敗、改發一般留言的原因（取代原始錯誤訊息顯示） */
   fallbackReason?: string;
+  /** 發布器附帶的標註（示範模式：「示範，未實際發布」） */
+  notice?: string;
   editedComment?: string;
   editedSuggestion?: string;
 }
