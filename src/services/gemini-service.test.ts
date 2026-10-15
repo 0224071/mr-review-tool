@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { analyzeGitDiffWithGemini, setGeminiRetryDelayForTest } from './gemini-service';
 import { REVIEW_CHECKLIST } from '../core/prompt-builder';
 import { MRAnalysisResult } from '../types/review';
@@ -50,6 +51,19 @@ describe('analyzeGitDiffWithGemini', () => {
     expect(result.schemaVersion).toBe(1);
     expect(result.title).toBe('新增分頁');
     expect(result.groups[0].additions).toBe(3);
+  });
+
+  it('超過 8 個檔案時依設計分批：playground MR !1（12 檔）按一次分析送出 2 次請求', async () => {
+    const rawDiff = readFileSync(new URL('../core/__fixtures__/playground-mr1.diff', import.meta.url), 'utf8');
+    const fetchMock = vi.fn(async () => geminiOk(RESULT));
+    vi.stubGlobal('fetch', fetchMock);
+    const progress: Array<[number, number]> = [];
+    await analyzeGitDiffWithGemini({ rawDiff, apiKey: 'k', onBatchProgress: (c, t) => progress.push([c, t]) });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(progress).toEqual([
+      [1, 2],
+      [2, 2],
+    ]);
   });
 
   it('503（模型暫時過載）時稍候重試，成功後繼續', async () => {

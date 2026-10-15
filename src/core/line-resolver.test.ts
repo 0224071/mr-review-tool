@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   extractBacktickSnippets,
   resolveReviewLine,
@@ -374,6 +375,88 @@ new file mode 100644
       expect(a).toMatchObject({ line: null, newLine: null, oldLine: null });
       expect(b).toBe(inDiff);
       expect(c).toBe(verified);
+    });
+  });
+
+  describe('playground MR !1 真實 diff（GitLab /diffs 回應）', () => {
+    const fixture = (name: string) => readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), 'utf8');
+    const diff = parseGitDiff(fixture('playground-mr1.diff'));
+    const favorites = 'src/hooks/useFavorites.ts';
+    const companyFilter = 'src/components/CompanyFilter.tsx';
+
+    it('新檔 hunk @@ -0,0 +1,N @@ 的行號與 MR 上既有 DiffNote 位置一致', () => {
+      const lineOf = (path: string, n: number) =>
+        diff.files.find((f) => f.newPath === path)!.hunks[0].lines.find((l) => l.newLineNumber === n)!;
+      expect(lineOf(favorites, 14)).toMatchObject({ type: 'add', content: '    saveFavorites(favorites);' });
+      expect(lineOf(favorites, 23)).toMatchObject({ type: 'add', content: '  }, []);' });
+      expect(lineOf(companyFilter, 14)).toMatchObject({
+        type: 'add',
+        content: '    const list = Array.from(new Set(users.map((u) => u.company))).sort();',
+      });
+      expect(lineOf(companyFilter, 16)).toMatchObject({ type: 'add', content: '  }, []);' });
+    });
+
+    it('Gemini 實際輸出的意見全部對齊到 AI 行號且已驗證', () => {
+      const reviews = JSON.parse(fixture('playground-mr1.gemini-reviews.json')) as MRReviewItem[];
+      for (const review of reviews) {
+        expect(resolveReviewLine(review, diff)).toEqual({ newLine: review.line, oldLine: null, lineVerified: true });
+      }
+    });
+
+    it('useFavorites L14：comment 只提到其他行的 `useEffect`／`localStorage` 時仍已驗證', () => {
+      const result = resolveReviewLine(
+        {
+          file: favorites,
+          line: 14,
+          codeSnippet: '    saveFavorites(favorites);',
+          comment: '`useEffect` 在元件初次 mount 時便會無條件發送 POST 請求，把 `localStorage` 的值寫入遠端伺服器。',
+          suggestion: '請使用 ref 標記跳過初次掛載執行，或改在使用者觸發收藏動作時發送請求。',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 14, oldLine: null, lineVerified: true });
+    });
+
+    it('useFavorites L23：短片段 `}, []);` 唯一命中且 AI 行號一致時已驗證', () => {
+      const result = resolveReviewLine(
+        {
+          file: favorites,
+          line: 23,
+          codeSnippet: '  }, []);',
+          comment: '`toggleFavorite` 依賴為空陣列且讀取外部 `favorites`，產生 Stale closure 問題。',
+          suggestion: '請改用 `setFavorites(prev => ...)` 函式型更新，並以 `useCallback` 包裹。',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 23, oldLine: null, lineVerified: true });
+    });
+
+    it('CompanyFilter L16：依賴陣列那行是新增行，唯一命中且 AI 行號一致時已驗證', () => {
+      const result = resolveReviewLine(
+        {
+          file: companyFilter,
+          line: 16,
+          codeSnippet: '  }, []);',
+          comment: '`useEffect` 依賴為空陣列，外部 `users` 於非同步載入完成後不會觸發更新。',
+          suggestion: '請將 `users` 加入依賴陣列，或直接使用 `useMemo` 計算選項清單。',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 16, oldLine: null, lineVerified: true });
+    });
+
+    it('短片段唯一命中但 AI 行號指向別行時仍未驗證', () => {
+      const result = resolveReviewLine(
+        {
+          file: companyFilter,
+          line: 14,
+          codeSnippet: '  }, []);',
+          comment: '`useEffect` 依賴為空陣列，外部 `users` 於非同步載入完成後不會觸發更新。',
+          suggestion: '請將 `users` 加入依賴陣列。',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 16, oldLine: null, lineVerified: false });
     });
   });
 });
