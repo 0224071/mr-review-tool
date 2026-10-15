@@ -27,6 +27,10 @@ interface PublishConfirmationModalProps {
   diffRefs?: GitLabDiffRefs;
   isPublishingSummary?: boolean;
   summaryTitle?: string;
+  /** 沒有 MR 資訊時顯示的目標名稱（示範模式） */
+  targetLabel?: string;
+  /** 標註於標題、內容與按鈕（示範模式：「示範，未實際發布」） */
+  notice?: string;
   isPublishing: boolean;
 }
 
@@ -50,6 +54,8 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
   diffRefs,
   isPublishingSummary = false,
   summaryTitle,
+  targetLabel,
+  notice,
   isPublishing,
 }) => {
   if (!isOpen) return null;
@@ -76,7 +82,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
                 {isPublishingSummary ? '確認發布整體摘要留言' : '確認發布審查意見至 GitLab'}
               </h2>
               <p className="text-xs text-muted">
-                透過 GitLab Discussions API 直接發表至 MR
+                {notice ? `模擬發布：${notice}` : '透過 GitLab Discussions API 直接發表至 MR'}
               </p>
             </div>
           </div>
@@ -92,12 +98,21 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto text-xs">
+        <div className="p-4 sm:p-6 space-y-4 max-h-[65vh] overflow-y-auto text-xs">
+          {notice && (
+            <div
+              role="note"
+              className="p-2.5 bg-warning-subtle border border-warning-border rounded-lg text-warning-text font-semibold flex items-center gap-1.5"
+            >
+              <AlertCircle className="w-4 h-4 text-warning shrink-0" />
+              {notice}：不會連到 GitLab，也不會產生真的留言
+            </div>
+          )}
           {/* Target MR Info Card */}
           <div className="bg-surface-subtle border border-surface-border rounded-lg p-3 space-y-1.5">
             <div className="text-[11px] text-muted-light uppercase font-semibold">目標 Merge Request</div>
             <div className="font-semibold text-ink text-sm flex items-center justify-between">
-              <span className="truncate">{mrInfo ? mrInfo.title : summaryTitle || 'GitLab MR'}</span>
+              <span className="truncate">{mrInfo ? mrInfo.title : targetLabel || summaryTitle || 'GitLab MR'}</span>
               {(mrInfo?.web_url || mrUrl) && (
                 <a
                   href={mrInfo?.web_url || mrUrl}
@@ -189,13 +204,15 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
           <div className="p-3 bg-surface-subtle border border-surface-border rounded-lg flex items-start gap-2 text-[11px] text-muted-dark">
             <AlertCircle className="w-4 h-4 text-muted shrink-0 mt-0.5" />
             <div>
-              送出後將直接發表在 GitLab 專案中，送出成功後該項目會標示「已發布」以避免重複送出；失敗的項目可在清單中重試。
+              {notice
+                ? `${notice}：送出後只在畫面上標示「已發布」，方便體驗流程。`
+                : '送出後將直接發表在 GitLab 專案中，送出成功後該項目會標示「已發布」以避免重複送出；失敗的項目可在清單中重試。'}
             </div>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3.5 bg-surface-subtle border-t border-surface-border flex items-center justify-end gap-2.5">
+        <div className="px-4 sm:px-6 py-3.5 bg-surface-subtle border-t border-surface-border flex flex-wrap items-center justify-end gap-2.5">
           <button
             type="button"
             onClick={onClose}
@@ -218,7 +235,10 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
             ) : (
               <>
                 <Send className="w-3.5 h-3.5" />
-                <span>確認發送 ({isPublishingSummary ? '1 則摘要' : `${itemsToPublish.length} 則意見`})</span>
+                <span>
+                  確認發送 ({isPublishingSummary ? '1 則摘要' : `${itemsToPublish.length} 則意見`})
+                  {notice && `・${notice}`}
+                </span>
               </>
             )}
           </button>

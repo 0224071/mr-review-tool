@@ -60,6 +60,10 @@ interface AnalysisResultViewProps {
   isSummaryPublished?: boolean;
   isSharedToMrPublished?: boolean;
   mrUrl?: string;
+  /** 沒有 MR 網址時仍可發布的目標名稱（示範模式） */
+  publishTargetLabel?: string;
+  /** 發布狀態旁的標註（示範模式：「示範，未實際發布」） */
+  publishNotice?: string;
 
   // 勾選與編輯狀態由 App 管理（存入歷史紀錄）
   selectedIndices: Set<number>;
@@ -91,6 +95,8 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   isSummaryPublished = false,
   isSharedToMrPublished = false,
   mrUrl = '',
+  publishTargetLabel,
+  publishNotice,
   selectedIndices,
   onSelectedIndicesChange: setSelectedIndices,
   draftEdits,
@@ -266,7 +272,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   };
 
   // Parse MR IID if connected
-  const hasGitLabMr = Boolean(mrUrl && mrUrl.trim());
+  const hasGitLabMr = Boolean((mrUrl && mrUrl.trim()) || publishTargetLabel);
   const mrMatch = mrUrl ? mrUrl.match(/merge_requests\/(\d+)/) : null;
   const mrIid = mrMatch ? mrMatch[1] : '';
 
@@ -393,7 +399,11 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                 >
                   <div className="font-semibold text-slate-800 flex items-center justify-between">
                     <span>發布摘要至 MR</span>
-                    {isSummaryPublished && <span className="text-[10px] text-emerald-600 font-bold">已發布</span>}
+                    {isSummaryPublished && (
+                      <span className="text-[10px] text-emerald-600 font-bold">
+                        {publishNotice ? `已發布（${publishNotice}）` : '已發布'}
+                      </span>
+                    )}
                   </div>
                   <p className="text-[10px] text-muted mt-0.5 leading-snug">
                     將整體標題、變更摘要與測試建議發布至 MR 討論區
@@ -412,7 +422,11 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                 >
                   <div className="font-semibold text-slate-800 flex items-center justify-between">
                     <span>共享分析（免 Key 共享）</span>
-                    {isSharedToMrPublished && <span className="text-[10px] text-emerald-600 font-bold">已共享</span>}
+                    {isSharedToMrPublished && (
+                      <span className="text-[10px] text-emerald-600 font-bold">
+                        {publishNotice ? `已共享（${publishNotice}）` : '已共享'}
+                      </span>
+                    )}
                   </div>
                   <p className="text-[10px] text-muted mt-0.5 leading-snug">
                     以隱藏標記留言至 MR，團隊成員開啟同一 MR 即可直接載入
@@ -699,15 +713,15 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
       {/* 5. Sticky Action Bar: ONLY appears when analysisResult exists AND connected to GitLab MR */}
       {hasGitLabMr && (
         <div className="sticky bottom-4 z-30 mt-4 animate-in slide-in-from-bottom duration-200">
-          <div className="bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-xl shadow-xl border border-slate-700/80 flex items-center justify-between gap-4">
+          <div className="bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-xl shadow-xl border border-slate-700/80 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
             {/* Left: Selected count & MR info */}
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex items-center gap-2 text-xs min-w-0">
               <span className="font-semibold">
                 已選 <strong className="text-orange-400 text-sm font-bold">{selectedIndices.size}</strong> 則
               </span>
               <span className="text-slate-400">·</span>
-              <span className="text-slate-300 font-mono">
-                MR !{mrIid || '連結中'}
+              <span className="text-slate-300 font-mono truncate">
+                {publishTargetLabel ?? `MR !${mrIid || '連結中'}`}
               </span>
             </div>
 
