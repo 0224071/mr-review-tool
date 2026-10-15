@@ -20,7 +20,15 @@
 npm ci && npm run dev
 ```
 
-啟動後開啟 <http://localhost:3000>。
+啟動後開啟 <http://localhost:3000>。dev 伺服器預設只聽本機（localhost），區網其他裝置連不到。
+
+若需要讓區網其他裝置（例如手機）連線，可自行加上 `--host`：
+
+```bash
+npm run dev -- --host
+```
+
+> ⚠️ 這會把 dev 伺服器開放給同一區網的所有裝置，請只在信任的網路使用，用完即關。
 
 ### 載入範例
 
