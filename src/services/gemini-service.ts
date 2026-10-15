@@ -28,7 +28,7 @@ export async function analyzeGitDiffWithGemini(options: AnalyzeOptions): Promise
     throw new Error('請提供有效的 Git Diff 內容');
   }
   if (!apiKey || !apiKey.trim()) {
-    throw new Error('尚未設定 Gemini API Key，請點擊右上角設定填入您的 API 金鑰。');
+    throw new Error('尚未設定 Gemini API Key，請點擊「填寫金鑰」按鈕填入您的 API 金鑰。');
   }
   return analyzeGitDiff({
     rawDiff,

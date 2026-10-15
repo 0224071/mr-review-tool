@@ -1127,7 +1127,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                     準備進行 MR 講解與結構審查
                   </h3>
                   <p className="text-xs text-muted leading-relaxed">
-                    在左側輸入 GitLab MR 網址抓取，或貼上 git diff；點擊「分析」開始。
+                    在輸入區填入 GitLab MR 網址抓取，或貼上 git diff；點擊「分析」開始。
                   </p>
                 </div>
               </div>
