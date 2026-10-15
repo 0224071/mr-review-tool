@@ -29,22 +29,113 @@ const REVIEW_KEYS = [
   'newLine', 'oldLine', 'lineVerified', 'aiLine', 'checklistId',
 ] as const satisfies readonly (keyof MRReviewItem)[];
 
+export const REDACTED = '[已遮罩]';
+
+/**
+ * 有固定前綴的 token / key 格式：保留前綴（讓讀者知道是哪一種），其餘遮罩。
+ * 前綴後的長度門檻夠長，避免把一般程式碼（例如 `sk-` 開頭的 CSS class）誤遮。
+ */
+const PREFIXED_SECRET_PATTERNS: readonly RegExp[] = [
+  // GitLab：glpat- / gldt- / glrt- / glptt- / glcbt- / gloas- 等
+  /\b(gl(?:pat|dt|rt|ptt|cbt|oas|imt|ft|soat|agent)-)[A-Za-z0-9_-]{16,}/g,
+  // GitHub：ghp_ / gho_ / ghu_ / ghs_ / ghr_、fine-grained github_pat_
+  /\b(gh[pousr]_|github_pat_)[A-Za-z0-9_-]{20,}/g,
+  // Google API key
+  /\b(AIza)[A-Za-z0-9_-]{30,}/g,
+  // OpenAI / Anthropic / OpenRouter：sk-、sk-proj-、sk-ant-、sk-or-v1-
+  /\b(sk-)[A-Za-z0-9_-]{20,}/g,
+  // Slack：xoxb- / xoxp- / xoxa- / xoxo- / xoxs- / xoxr-
+  /\b(xox[abposr]-)[A-Za-z0-9-]{10,}/g,
+  // AWS access key id
+  /\b(AKIA|ASIA)[A-Z0-9-]{16,}/g,
+  // Authorization: Bearer / Basic 後面的憑證
+  /\b((?:Bearer|Basic)\s+)[A-Za-z0-9._~+/=-]{16,}/g,
+  // JWT（header.payload.signature）
+  /\b(eyJ)[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+];
+
+/** `token=…`、`"api_key": "…"`、`PRIVATE-TOKEN: …` 這類鍵值；值要像機密（見 looksRandom）才遮 */
+const KEY_VALUE_PATTERN =
+  /\b((?:api[_-]?key|access[_-]?token|private[_-]?token|auth[_-]?token|secret|password|passwd|token|x-api-key)["']?\s*[:=]\s*["']?)([A-Za-z0-9._~+/=-]{12,})/gi;
+
+/** 沒有前綴的長字串（例如 base64、隨機 key）：長度、字元種類與熵都夠高才算 */
+const LONG_TOKEN_PATTERN = /[A-Za-z0-9_+/=-]{32,}/g;
+
+function shannonEntropy(str: string): number {
+  const counts = new Map<string, number>();
+  for (const ch of str) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let entropy = 0;
+  for (const n of counts.values()) {
+    const p = n / str.length;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+
+/**
+ * 看起來像隨機產生的憑證：同時有大寫、小寫、至少 3 個數字，且熵夠高。
+ * 識別字（camelCase、SNAKE_CASE）、檔案路徑、git SHA（只有小寫 hex）都不符合。
+ */
+function looksRandom(str: string, minEntropy: number): boolean {
+  if (!/[A-Z]/.test(str) || !/[a-z]/.test(str)) return false;
+  if ((str.match(/[0-9]/g) ?? []).length < 3) return false;
+  return shannonEntropy(str) >= minEntropy;
+}
+
+/** 把文字中看起來像 token / API key 的字串遮罩（模型可能把 diff 裡的 token 原文寫進意見） */
+export function redactSecrets(text: string): string {
+  if (typeof text !== 'string' || !text) return text;
+  let out = text;
+  for (const pattern of PREFIXED_SECRET_PATTERNS) {
+    out = out.replace(pattern, (_m, prefix: string) => `${prefix}${REDACTED}`);
+  }
+  out = out.replace(KEY_VALUE_PATTERN, (m, key: string, value: string) =>
+    looksRandom(value, 3.5) ? `${key}${REDACTED}` : m
+  );
+  out = out.replace(LONG_TOKEN_PATTERN, (m) => (looksRandom(m, 4) ? REDACTED : m));
+  return out;
+}
+
+const redactAll = (list: string[] | undefined) => list?.map(redactSecrets);
+
 /**
  * 匯出用的結果：只保留 MRAnalysisResult schema 欄位（白名單，逐層）。
  * 模型回傳、MR 留言的共享分析與歷史紀錄都不會剝掉 schema 以外的欄位，
  * 若其中夾帶 key / token（或呼叫端誤把設定、整筆紀錄傳進來），不能原樣寫進可分享的 HTML。
+ * 白名單內的自由文字欄位（意見、建議、程式碼片段、摘要等）再遮罩看起來像 token / key 的字串。
  */
 export function toExportableResult(result: MRAnalysisResult): MRAnalysisResult {
   const picked = pick(result, RESULT_KEYS);
   return {
     ...picked,
-    groups: (result.groups ?? []).map((g) => pick(g, GROUP_KEYS)),
+    title: redactSecrets(picked.title),
+    description: redactSecrets(picked.description),
+    summary: redactAll(picked.summary)!,
+    testSuggestions: redactAll(picked.testSuggestions)!,
+    groups: (result.groups ?? []).map((g) => {
+      const group = pick(g, GROUP_KEYS);
+      return { ...group, name: redactSecrets(group.name), summary: redactSecrets(group.summary) };
+    }),
     graph: {
-      nodes: (result.graph?.nodes ?? []).map((n) => pick(n, NODE_KEYS)),
-      edges: (result.graph?.edges ?? []).map((e) => pick(e, EDGE_KEYS)),
+      nodes: (result.graph?.nodes ?? []).map((n) => {
+        const node = pick(n, NODE_KEYS);
+        return { ...node, label: redactSecrets(node.label) };
+      }),
+      edges: (result.graph?.edges ?? []).map((e) => {
+        const edge = pick(e, EDGE_KEYS);
+        return edge.label ? { ...edge, label: redactSecrets(edge.label) } : edge;
+      }),
     },
     ...(result.checklistCoverage ? { checklistCoverage: result.checklistCoverage.map((c) => pick(c, COVERAGE_KEYS)) } : {}),
-    reviews: (result.reviews ?? []).map((r) => pick(r, REVIEW_KEYS)),
+    reviews: (result.reviews ?? []).map((r) => {
+      const review = pick(r, REVIEW_KEYS);
+      return {
+        ...review,
+        codeSnippet: redactSecrets(review.codeSnippet),
+        comment: redactSecrets(review.comment),
+        suggestion: redactSecrets(review.suggestion),
+      };
+    }),
   };
 }
 
@@ -189,7 +280,7 @@ export function generateOfflineHtmlReport(input: MRAnalysisResult): string {
         <div class="review-item review-${r.severity}">
           <div style="display: flex; gap: 8px; font-size: 11px;">
             <span class="tag">嚴重程度: ${r.severity.toUpperCase()}</span>
-            <span class="tag">分類: ${r.category}</span>
+            <span class="tag">分類: ${escapeHtml(r.category)}</span>
             <span class="tag" style="font-family: monospace;">${escapeHtml(r.file)}${
             r.line ? `:L${r.line}` : ''
           }</span>
