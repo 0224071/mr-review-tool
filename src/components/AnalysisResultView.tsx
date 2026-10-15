@@ -150,6 +150,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const publishMenuRef = useRef<HTMLDivElement>(null);
   const stickyMoreRef = useRef<HTMLDivElement>(null);
+  const publishBarRef = useRef<HTMLDivElement>(null);
 
   // Close menus when clicking outside
   useEffect(() => {
@@ -283,6 +284,22 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   const hasGitLabMr = Boolean((mrUrl && mrUrl.trim()) || publishTargetLabel);
   const mrMatch = mrUrl ? mrUrl.match(/merge_requests\/(\d+)/) : null;
   const mrIid = mrMatch ? mrMatch[1] : '';
+
+  // 浮動發布列會疊在內容上：把它佔的高度（含 bottom-4 的 16px）寫進 --publish-bar-space，
+  // 讓頁面捲動（scroll-padding）與意見清單底部留白都避開它，最後一則也能完整捲出來
+  useEffect(() => {
+    const bar = publishBarRef.current;
+    const root = document.documentElement;
+    if (!bar) return;
+    const update = () => root.style.setProperty('--publish-bar-space', `${bar.offsetHeight + 16}px`);
+    update();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    observer?.observe(bar);
+    return () => {
+      observer?.disconnect();
+      root.style.removeProperty('--publish-bar-space');
+    };
+  }, [hasGitLabMr]);
 
   // 7. Checklist coverage banner: ONLY render when ?debug is in URL
   const isDebugMode = useMemo(() => {
@@ -720,7 +737,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
 
       {/* 5. Sticky Action Bar: ONLY appears when analysisResult exists AND connected to GitLab MR */}
       {hasGitLabMr && (
-        <div className="sticky bottom-4 z-30 mt-4 animate-in slide-in-from-bottom duration-200">
+        <div ref={publishBarRef} role="region" aria-label="發布列" className="sticky bottom-4 z-30 mt-4 animate-in slide-in-from-bottom duration-200">
           <div className="bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-xl shadow-xl border border-slate-700/80 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
             {/* Left: Selected count & MR info */}
             <div className="flex items-center gap-2 text-xs min-w-0">
