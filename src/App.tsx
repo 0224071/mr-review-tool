@@ -19,13 +19,13 @@ import {
   normalizeHost,
   openHistoryStore,
   PublishedRecord,
-  toMrSnapshot,
 } from './core/history-store';
 import {
   createPublishedRecord,
   defaultSelectedIndices,
   findPublishedMatches,
 } from './core/publish-dedup';
+import { buildAnalysisRecord, shouldServeFromCache } from './core/analysis-record';
 import { enrichGroupsWithParsedDiff, parseGitDiff } from './core/diff-parser';
 import { alignReviewsWithDiff } from './core/line-resolver';
 import { analyzeGitDiffWithGemini } from './services/gemini-service';
@@ -296,26 +296,8 @@ export default function App() {
         existing = undefined;
       }
     }
-    const published = existing?.published ?? [];
-    const matches = findPublishedMatches(result.reviews, {}, published, notes);
     const now = Date.now();
-    const record: HistoryRecord = {
-      ...source,
-      title: mr ? mr.title : result.title,
-      mrUrl: mr?.web_url,
-      mr: mr ? toMrSnapshot(mr) : undefined,
-      headSha: mr?.diff_refs?.head_sha ?? null,
-      latestHeadSha: mr?.diff_refs?.head_sha ?? null,
-      rawDiff: diffText,
-      analyzedAt: now,
-      result,
-      selectedIndices: Array.from(defaultSelectedIndices(result.reviews, matches)),
-      draftEdits: {},
-      published,
-      summaryPublished: false,
-      sharedPublished: false,
-      pinned: existing?.pinned ?? false,
-    };
+    const record = buildAnalysisRecord({ source, result, diffText, mr, notes, existing, now });
 
     if (historyStore) {
       try {
@@ -371,21 +353,25 @@ export default function App() {
 
   const handleAnalyze = async () => {
     // 有快取（且不是正在顯示的那筆）就直接顯示，不呼叫 Gemini；
-    // 正在顯示的紀錄再按「分析」視為使用者要求重新分析。
+    // 正在顯示的紀錄再按「分析」視為使用者要求重新分析（保留已發布紀錄）。
     if (historyStore && rawDiff.trim()) {
       const source = describeSource(rawDiff, currentGitLabMr);
-      if (source.id !== currentRecordId) {
-        try {
-          const cached = await historyStore.get(source.id);
-          const currentHead = currentGitLabMr?.diff_refs?.head_sha;
-          const sameVersion = !cached?.headSha || !currentHead || cached.headSha === currentHead;
-          if (cached && sameVersion) {
-            applyRecord(cached);
-            return;
-          }
-        } catch {
-          // 讀取失敗就照常分析
+      try {
+        const cached = await historyStore.get(source.id);
+        if (
+          cached &&
+          shouldServeFromCache({
+            sourceId: source.id,
+            currentRecordId,
+            cached,
+            currentHeadSha: currentGitLabMr?.diff_refs?.head_sha,
+          })
+        ) {
+          applyRecord(cached);
+          return;
         }
+      } catch {
+        // 讀取失敗就照常分析
       }
     }
     await runAnalysis(rawDiff, currentGitLabMr);

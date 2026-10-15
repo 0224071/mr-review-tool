@@ -163,8 +163,13 @@ export async function fetchGitLabMrRawDiff(
   return rawChunks.join('\n');
 }
 
+const NOTES_PER_PAGE = 100;
+/** 防止異常回應造成無限迴圈（100 頁 = 1 萬則留言） */
+const NOTES_MAX_PAGES = 100;
+
 /**
- * Fetches MR notes (comments) to detect previously shared analysis results
+ * Fetches all MR notes (comments), newest first, following GitLab pagination (x-next-page).
+ * 第一頁失敗回傳空陣列；之後的頁面失敗則拋錯，避免以不完整的留言做重複發布比對。
  */
 export async function fetchGitLabMrNotes(
   baseUrl: string,
@@ -174,13 +179,30 @@ export async function fetchGitLabMrNotes(
 ): Promise<GitLabNote[]> {
   const cleanBase = baseUrl.replace(/\/$/, '');
   const encodedPath = encodeURIComponent(projectPath);
-  const url = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/notes?per_page=100&sort=desc`;
+  const notes: GitLabNote[] = [];
 
-  const res = await fetch(url, { headers: getHeaders(token) });
-  if (!res.ok) {
-    return [];
+  let page: number | null = 1;
+  for (let fetched = 0; page !== null && fetched < NOTES_MAX_PAGES; fetched++) {
+    const url = `${cleanBase}/api/v4/projects/${encodedPath}/merge_requests/${mrIid}/notes?per_page=${NOTES_PER_PAGE}&page=${page}&sort=desc`;
+    const res = await fetch(url, { headers: getHeaders(token) });
+    if (!res.ok) {
+      if (page === 1) return [];
+      throw new Error(`讀取 MR 留言失敗 (第 ${page} 頁，${res.status})`);
+    }
+    const batch: unknown = await res.json();
+    if (!Array.isArray(batch)) break;
+    notes.push(...(batch as GitLabNote[]));
+
+    const nextHeader = res.headers.get('x-next-page');
+    if (nextHeader !== null) {
+      const next = parseInt(nextHeader, 10);
+      page = Number.isNaN(next) || next <= page ? null : next;
+    } else {
+      // 沒有分頁 header（例如被 proxy 拿掉）時，以回傳筆數判斷是否還有下一頁
+      page = batch.length === NOTES_PER_PAGE ? page + 1 : null;
+    }
   }
-  return res.json();
+  return notes;
 }
 
 /**

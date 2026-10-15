@@ -32,6 +32,15 @@ export interface AnalyzeOptions {
   onBatchProgress?: (current: number, total: number) => void;
 }
 
+const GEMINI_RETRYABLE_STATUS = new Set([500, 502, 503, 504]);
+const GEMINI_RETRY_DELAYS_MS = [2000, 5000];
+let geminiRetryDelay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** 測試用：替換重試等待（避免測試真的等待） */
+export function setGeminiRetryDelayForTest(fn: (ms: number) => Promise<void>): void {
+  geminiRetryDelay = fn;
+}
+
 /**
  * Executes a direct browser-local REST call to the Gemini API.
  */
@@ -65,17 +74,22 @@ async function callGeminiGenerateContent<T>(params: {
   };
 
   let response: Response;
-  try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    throw new Error(`連線至 Gemini API 失敗（網路問題或 CORS 受阻）：${errorMsg}`);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      throw new Error(`連線至 Gemini API 失敗（網路問題或 CORS 受阻）：${errorMsg}`);
+    }
+    // 模型暫時過載（503 high demand）等暫時性錯誤：稍候重試，避免整次分析失敗
+    if (!GEMINI_RETRYABLE_STATUS.has(response.status) || attempt >= GEMINI_RETRY_DELAYS_MS.length) break;
+    await geminiRetryDelay(GEMINI_RETRY_DELAYS_MS[attempt]);
   }
 
   if (!response.ok) {

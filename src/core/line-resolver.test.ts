@@ -4,6 +4,7 @@ import {
   resolveReviewLine,
   alignReviewsWithDiff,
 } from './line-resolver';
+import { parseGitDiff } from './diff-parser';
 import { ParsedDiff } from '../types/diff';
 import { MRReviewItem } from '../types/review';
 
@@ -201,6 +202,129 @@ describe('line-resolver', () => {
       expect(aligned[0].line).toBe(11);
       expect(aligned[0].newLine).toBe(11);
       expect(aligned[0].lineVerified).toBe(true);
+    });
+  });
+
+  describe('修改建議中的修正後程式碼（端到端實測回歸）', () => {
+    const diff = parseGitDiff(`diff --git a/src/components/UserList.tsx b/src/components/UserList.tsx
+--- a/src/components/UserList.tsx
++++ b/src/components/UserList.tsx
+@@ -12,6 +12,12 @@
+     <ul className="user-list">
+-      {users.map((user) => (
+-        <li key={user.id} className="user-item">
+-          <img src={user.avatarUrl} alt={user.name} width={40} height={40} />
++      {users.map((user, index) => (
++        <li key={index} className="user-item">
++          <img src={user.avatarUrl} width={40} height={40} />
++          <div
++            style={{ color: favorites.includes(user.id) ? '#f5a623' : '#cccccc' }}
++            onClick={() => onToggleFavorite(user.id)}
++          >
++            ★
++          </div>
+         </li>
+`);
+    const file = 'src/components/UserList.tsx';
+
+    it('建議片段不在 diff 中時，以 codeSnippet 精準命中的新增行為準並標記已驗證', () => {
+      const result = resolveReviewLine(
+        {
+          file,
+          line: 25,
+          codeSnippet: '            onClick={() => onToggleFavorite(user.id)}',
+          comment: '使用具點擊事件的 div 未具備按鈕語意與鍵盤操作支援。',
+          suggestion: '請改用 `<button type="button">` 元素，或補上 `role="button"`、`tabIndex={0}` 及 `onKeyDown`。',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 18, oldLine: null, lineVerified: true });
+    });
+
+    it('建議「改回舊寫法」命中刪除行時，不把錨點從新增行移到刪除行', () => {
+      const result = resolveReviewLine(
+        {
+          file,
+          line: 15,
+          codeSnippet: '          <img src={user.avatarUrl} width={40} height={40} />',
+          comment: 'img 標籤移除了 alt 屬性，違反無障礙規範。',
+          suggestion: '請補上 `alt={user.name}`。',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 15, oldLine: null, lineVerified: true });
+    });
+
+    it('comment 提到且存在於新增行的片段仍會用來修正行號', () => {
+      const result = resolveReviewLine(
+        {
+          file,
+          line: 13,
+          codeSnippet: '      {users.map((user, index) => (',
+          comment: '不應使用 `key={index}`',
+          suggestion: '請改回 `key={user.id}`',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 14, oldLine: null, lineVerified: true });
+    });
+
+    it('片段只出現在刪除行、且候選行就是刪除行時仍可驗證', () => {
+      const result = resolveReviewLine(
+        {
+          file,
+          line: 14,
+          codeSnippet: '          <img src={user.avatarUrl} alt={user.name} width={40} height={40} />',
+          comment: '原本的 `alt={user.name}` 被移除',
+          suggestion: '保留 alt',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: null, oldLine: 15, lineVerified: true });
+    });
+
+    it('codeSnippet 被截斷時以包含比對找到新增行', () => {
+      const result = resolveReviewLine(
+        {
+          file,
+          line: 16,
+          codeSnippet: '        <li key={index} className=',
+          comment: '列表項目的 key 從原本的 user.id 變更為 index，會造成重繪異常。',
+          suggestion: '請恢復使用穩定的唯一識別碼 `key={user.id}`。',
+        },
+        diff
+      );
+      expect(result).toEqual({ newLine: 14, oldLine: null, lineVerified: true });
+    });
+
+    it('反引號片段在檔案中多處出現時，不把精準命中的行拉到別行', () => {
+      const hookDiff = parseGitDiff(`diff --git a/src/hooks/useFavorites.ts b/src/hooks/useFavorites.ts
+new file mode 100644
+--- /dev/null
++++ b/src/hooks/useFavorites.ts
+@@ -0,0 +1,9 @@
++  const toggleFavorite = useCallback((id: number) => {
++    if (favorites.includes(id)) {
++      setFavorites(favorites.filter((f) => f !== id));
++    } else {
++      setFavorites([...favorites, id]);
++    }
++  }, []);
++
++  return { favorites, toggleFavorite };
+`);
+      const result = resolveReviewLine(
+        {
+          file: 'src/hooks/useFavorites.ts',
+          line: 9,
+          codeSnippet: '  }, []);',
+          comment: 'useCallback 依賴陣列為空但函式本體引用了外部變數 favorites。',
+          suggestion: '請改用函式型更新以移除對 `favorites` 的讀取。',
+        },
+        hookDiff
+      );
+      // 行號維持在依賴陣列那行；片段太短又無法以反引號佐證 → 未驗證
+      expect(result).toEqual({ newLine: 7, oldLine: null, lineVerified: false });
     });
   });
 });
