@@ -101,8 +101,9 @@ Token 請給最少權限：
 ## 測試
 
 ```bash
-npm test          # 等同 npx vitest run
-npx tsc --noEmit  # 型別檢查（也可用 npm run lint）
+npm test           # 等同 npx vitest run
+npm run typecheck  # 型別檢查，等同 npx tsc --noEmit
+npm run lint       # ESLint（error 會讓 CI 失敗，warning 不會）
 ```
 
 ## Build

@@ -32,7 +32,7 @@ export function loadSettings(storage: StorageLike | undefined = defaultStorage()
     const stored = storage?.getItem(SETTINGS_STORAGE_KEY);
     if (stored) return normalizeSettings(JSON.parse(stored));
   } catch {
-    // ignore
+    // storage 不可用或內容不是有效 JSON：退回預設設定，不讓設定讀取失敗擋住整個 App
   }
   return normalizeSettings({});
 }
@@ -40,8 +40,9 @@ export function loadSettings(storage: StorageLike | undefined = defaultStorage()
 export function saveSettings(settings: AppSettings, storage: StorageLike | undefined = defaultStorage()): void {
   try {
     storage?.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-  } catch {
-    // ignore
+  } catch (err) {
+    // storage 不可用（無痕模式、容量已滿等）時不中斷操作；設定只在本次頁面有效
+    console.warn('設定無法寫入 localStorage，重新整理後將不會保留:', err);
   }
 }
 

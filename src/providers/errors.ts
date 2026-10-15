@@ -102,7 +102,7 @@ export function describeNetworkError(label: string, url: string, err: unknown, h
   try {
     host = new URL(url).host;
   } catch {
-    // ignore
+    // 網址無法解析時直接用原字串顯示在錯誤訊息裡
   }
   const raw = err instanceof Error ? err.message : String(err);
   return new LlmError(
