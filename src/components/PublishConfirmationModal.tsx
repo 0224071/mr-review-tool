@@ -8,8 +8,9 @@ import {
   MessageSquare,
   Sparkles,
 } from 'lucide-react';
-import { GitLabMergeRequestInfo } from '../types/gitlab';
+import { GitLabDiffRefs, GitLabMergeRequestInfo } from '../types/gitlab';
 import { MRReviewItem } from '../types/review';
+import { plannedPublishMode } from '../services/review-publisher';
 
 interface PublishConfirmationModalProps {
   isOpen: boolean;
@@ -22,9 +23,21 @@ interface PublishConfirmationModalProps {
     customComment?: string;
     customSuggestion?: string;
   }>;
+  /** 分析時的 diff_refs，用來預估每則是行內或一般留言 */
+  diffRefs?: GitLabDiffRefs;
   isPublishingSummary?: boolean;
   summaryTitle?: string;
   isPublishing: boolean;
+}
+
+/** 確認對話框中每則的發布方式說明 */
+export function describePublishMode(review: MRReviewItem, diffRefs: GitLabDiffRefs | undefined): string {
+  if (review.lineVerified === false) return '一般留言（行號未驗證）';
+  if (plannedPublishMode(review, diffRefs) === 'general') {
+    return diffRefs ? '一般留言（沒有行號）' : '一般留言（缺少 diff 版本資訊）';
+  }
+  const line = review.newLine ?? review.oldLine ?? review.line;
+  return `行內留言 L${line}`;
 }
 
 export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> = ({
@@ -34,26 +47,35 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
   mrInfo,
   mrUrl,
   itemsToPublish,
+  diffRefs,
   isPublishingSummary = false,
   summaryTitle,
   isPublishing,
 }) => {
   if (!isOpen) return null;
 
+  const generalCount = itemsToPublish.filter((i) => plannedPublishMode(i.review, diffRefs) === 'general').length;
+  const unverifiedCount = itemsToPublish.filter((i) => i.review.lineVerified === false).length;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-      <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={isPublishingSummary ? '確認發布整體摘要留言' : '確認發布審查意見至 GitLab'}
+        className="bg-surface rounded-xl shadow-2xl max-w-lg w-full overflow-hidden border border-surface-border"
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/70">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-border bg-surface-subtle">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-lg bg-orange-50 text-orange-600">
+            <div className="p-2 rounded-lg bg-gitlab-subtle text-gitlab">
               <Send className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-semibold text-slate-800">
+              <h2 className="text-base font-semibold text-ink">
                 {isPublishingSummary ? '確認發布整體摘要留言' : '確認發布審查意見至 GitLab'}
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-muted">
                 透過 GitLab Discussions API 直接發表至 MR
               </p>
             </div>
@@ -62,7 +84,8 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
             type="button"
             onClick={onClose}
             disabled={isPublishing}
-            className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+            aria-label="關閉"
+            className="text-muted-light hover:text-muted-dark p-1 rounded-md"
           >
             <X className="w-5 h-5" />
           </button>
@@ -71,75 +94,88 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
         {/* Content */}
         <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto text-xs">
           {/* Target MR Info Card */}
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1.5">
-            <div className="text-[11px] text-slate-400 uppercase font-semibold">目標 Merge Request</div>
-            <div className="font-semibold text-slate-800 text-sm flex items-center justify-between">
+          <div className="bg-surface-subtle border border-surface-border rounded-lg p-3 space-y-1.5">
+            <div className="text-[11px] text-muted-light uppercase font-semibold">目標 Merge Request</div>
+            <div className="font-semibold text-ink text-sm flex items-center justify-between">
               <span className="truncate">{mrInfo ? mrInfo.title : summaryTitle || 'GitLab MR'}</span>
               {(mrInfo?.web_url || mrUrl) && (
                 <a
                   href={mrInfo?.web_url || mrUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-indigo-600 hover:text-indigo-800 shrink-0 ml-2"
+                  className="text-primary hover:text-primary-hover shrink-0 ml-2"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               )}
             </div>
             {mrInfo && (
-              <div className="text-[11px] text-slate-500 font-mono">
+              <div className="text-[11px] text-muted font-mono">
                 !{mrInfo.iid} · {mrInfo.source_branch} → {mrInfo.target_branch}
               </div>
             )}
           </div>
 
           {isPublishingSummary ? (
-            <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-lg space-y-1">
-              <div className="font-semibold text-indigo-900 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+            <div className="p-3 bg-primary-subtle border border-primary-border rounded-lg space-y-1">
+              <div className="font-semibold text-ink flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-primary" />
                 即將發送整體摘要為一般 MR 留言
               </div>
-              <p className="text-slate-600">
+              <p className="text-muted-dark">
                 包含 MR 標題、核心變更摘要項目、意圖分組清單與測試建議。
               </p>
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between font-medium text-slate-700">
-                <span>將送出的審查意見清單 ({itemsToPublish.length} 則)：</span>
-                <span className="text-indigo-600 font-bold">精準錨定行號</span>
+              <div className="flex items-center justify-between font-medium text-muted-dark">
+                <span>將送出的審查意見 ({itemsToPublish.length} 則)：</span>
+                <span className="text-muted">
+                  行內 {itemsToPublish.length - generalCount} · 一般留言 {generalCount}
+                </span>
               </div>
 
-              {/* Items List Preview */}
-              <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden max-h-48 overflow-y-auto">
-                {itemsToPublish.map(({ review, customComment }, idx) => (
-                  <div key={idx} className="p-2.5 bg-white hover:bg-slate-50 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-slate-700 font-semibold flex items-center gap-1">
-                        <FileCode className="w-3 h-3 text-slate-400" />
-                        {review.file}{review.line != null ? `:L${review.line}` : review.lineVerified === false ? ':行號未驗證' : ''}
-                        {review.lineVerified === false && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-amber-100 text-amber-800 border border-amber-300">
-                            此意見行號可能不準確
-                          </span>
-                        )}
-                      </span>
-                      <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-slate-100 text-slate-600 uppercase">
-                        {review.severity} · {review.category}
-                      </span>
-                    </div>
-                    <p className="text-slate-600 truncate">{customComment || review.comment}</p>
-                  </div>
-                ))}
-              </div>
+              {/* 逐則列出將發布的內容與方式 */}
+              <ol className="divide-y divide-surface-border border border-surface-border rounded-lg overflow-hidden max-h-72 overflow-y-auto">
+                {itemsToPublish.map(({ review, customComment, customSuggestion }, idx) => {
+                  const mode = plannedPublishMode(review, diffRefs);
+                  return (
+                    <li key={idx} className="p-2.5 bg-surface space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-muted-dark font-semibold flex items-center gap-1 min-w-0">
+                          <FileCode className="w-3 h-3 text-muted-light shrink-0" />
+                          <span className="truncate">{review.file}</span>
+                        </span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-surface-muted text-muted uppercase shrink-0">
+                          {review.severity} · {review.category}
+                        </span>
+                      </div>
+                      <div
+                        className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium border ${
+                          mode === 'inline'
+                            ? 'bg-primary-subtle text-primary border-primary-border'
+                            : 'bg-warning-subtle text-warning-text border-warning-border'
+                        }`}
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                        {describePublishMode(review, diffRefs)}
+                      </div>
+                      <p className="text-ink whitespace-pre-wrap break-words">{customComment || review.comment}</p>
+                      <p className="text-muted whitespace-pre-wrap break-words font-mono text-[11px]">
+                        建議：{customSuggestion || review.suggestion}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ol>
 
-              {itemsToPublish.some((i) => i.review.lineVerified === false) && (
-                <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg flex items-start gap-2 text-[11px] text-amber-900">
-                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              {unverifiedCount > 0 && (
+                <div className="p-3 bg-warning-subtle border border-warning-border rounded-lg flex items-start gap-2 text-[11px] text-warning-text">
+                  <AlertCircle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
                   <div>
-                    <span className="font-semibold">⚠️ 提醒：包含行號未驗證的審查意見！</span>
-                    <p className="text-amber-800 mt-0.5">
-                      部分選取的意見未能於 Diff 中精確錨定到相符程式碼行，此意見行號可能不準確，送出時可能無法正確對應至 GitLab 行號。
+                    <span className="font-semibold">包含 {unverifiedCount} 則行號未驗證的意見</span>
+                    <p className="mt-0.5">
+                      這些意見不會掛在程式碼行上，改以一般留言發布，開頭註明「檔案:行號（行號未驗證）」。
                     </p>
                   </div>
                 </div>
@@ -147,21 +183,21 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
             </>
           )}
 
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-start gap-2 text-[11px] text-slate-700">
-            <AlertCircle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+          <div className="p-3 bg-surface-subtle border border-surface-border rounded-lg flex items-start gap-2 text-[11px] text-muted-dark">
+            <AlertCircle className="w-4 h-4 text-muted shrink-0 mt-0.5" />
             <div>
-              送出後將直接發表在 GitLab 專案中，送出成功後該項目會標示「已發布」以避免重複送出。
+              送出後將直接發表在 GitLab 專案中，送出成功後該項目會標示「已發布」以避免重複送出；失敗的項目可在清單中重試。
             </div>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
+        <div className="px-6 py-3.5 bg-surface-subtle border-t border-surface-border flex items-center justify-end gap-2.5">
           <button
             type="button"
             onClick={onClose}
             disabled={isPublishing}
-            className="px-4 py-2 text-xs text-slate-600 hover:text-slate-800 font-medium"
+            className="px-4 py-2 text-xs text-muted-dark hover:text-ink font-medium"
           >
             取消
           </button>
@@ -169,11 +205,11 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
             type="button"
             onClick={onConfirm}
             disabled={isPublishing}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            className="px-4 py-2 bg-gitlab hover:bg-gitlab-hover text-surface rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
           >
             {isPublishing ? (
               <>
-                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <div className="w-3.5 h-3.5 border-2 border-surface/30 border-t-surface rounded-full animate-spin" />
                 <span>發布中...</span>
               </>
             ) : (

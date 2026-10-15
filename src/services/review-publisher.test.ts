@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildDiscussionPosition, publishReviewItem } from './review-publisher';
+import { buildDiscussionPosition, plannedPublishMode, publishReviewBatch, publishReviewItem } from './review-publisher';
 import { MRReviewItem } from '../types/review';
 import { GitLabDiffRefs } from '../types/gitlab';
 
@@ -137,5 +137,74 @@ describe('buildDiscussionPosition', () => {
 
   it('沒有任何行號時回傳 undefined', () => {
     expect(buildDiscussionPosition(review({ line: null, newLine: null, oldLine: null }), REFS)).toBeUndefined();
+  });
+});
+
+describe('plannedPublishMode', () => {
+  it('已驗證且有 diff_refs：行內；未驗證、沒有行號或缺 diff_refs：一般留言', () => {
+    expect(plannedPublishMode(review(), REFS)).toBe('inline');
+    expect(plannedPublishMode(review({ lineVerified: false }), REFS)).toBe('general');
+    expect(plannedPublishMode(review({ line: null, newLine: null, oldLine: null }), REFS)).toBe('general');
+    expect(plannedPublishMode(review(), undefined)).toBe('general');
+  });
+});
+
+describe('publishReviewBatch', () => {
+  const item = (index: number, over: Partial<MRReviewItem> = {}) => ({
+    index,
+    review: review(over),
+    comment: `意見 ${index}`,
+    suggestion: `建議 ${index}`,
+  });
+
+  it('單則發布成功：一次 POST，回傳 discussion id', async () => {
+    const calls = mockGitLab({ discussion: () => json({ id: 'disc-1' }) });
+    const outcomes = await publishReviewBatch(TARGET, [item(3)], REFS);
+    expect(outcomes).toEqual([{ index: 3, ok: true, result: { discussionId: 'disc-1', mode: 'inline' } }]);
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
+  });
+
+  it('批次發布成功：依序發出，已驗證帶 position、未驗證走一般留言', async () => {
+    const calls = mockGitLab({ discussion: (_b, nth) => json({ id: `disc-${nth}` }) });
+    const started: number[] = [];
+    const done: number[] = [];
+    const outcomes = await publishReviewBatch(
+      TARGET,
+      [item(0), item(1, { file: 'src/b.ts', newLine: 20, line: 20 }), item(2, { lineVerified: false })],
+      REFS,
+      { onStart: (i) => started.push(i), onDone: (o) => done.push(o.index) }
+    );
+    expect(outcomes.map((o) => o.ok)).toEqual([true, true, true]);
+    expect(outcomes.map((o) => (o.ok ? o.result.mode : null))).toEqual(['inline', 'inline', 'general']);
+    expect(started).toEqual([0, 1, 2]);
+    expect(done).toEqual([0, 1, 2]);
+
+    const posts = calls.filter((c) => c.method === 'POST');
+    expect(posts).toHaveLength(3);
+    expect(posts[0].body?.position).toMatchObject({ new_path: 'src/cart.ts', new_line: 10 });
+    expect(posts[1].body?.position).toMatchObject({ new_path: 'src/b.ts', new_line: 20 });
+    expect(posts[2].body?.position).toBeUndefined();
+    expect(posts[2].body?.body.startsWith('src/cart.ts:10（行號未驗證）')).toBe(true);
+    expect(calls.some((c) => c.url.includes('/notes'))).toBe(false);
+  });
+
+  it('部分失敗：不中斷其餘，失敗項目帶錯誤訊息供重試', async () => {
+    mockGitLab({
+      discussion: (_b, nth) => (nth === 1 ? json({ message: 'forbidden' }, 403) : json({ id: `disc-${nth}` })),
+    });
+    const outcomes = await publishReviewBatch(TARGET, [item(0), item(1), item(2)], REFS);
+    expect(outcomes.map((o) => o.ok)).toEqual([true, false, true]);
+    const failed = outcomes[1];
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) expect(failed.error).toContain('(403)');
+  });
+
+  it('失敗後重試同一則：成功並回傳新的 discussion id', async () => {
+    let attempt = 0;
+    mockGitLab({ discussion: () => (attempt++ === 0 ? json({ message: 'timeout' }, 502) : json({ id: 'disc-retry' })) });
+    const first = await publishReviewBatch(TARGET, [item(5)], REFS);
+    expect(first[0].ok).toBe(false);
+    const retry = await publishReviewBatch(TARGET, [item(5)], REFS);
+    expect(retry).toEqual([{ index: 5, ok: true, result: { discussionId: 'disc-retry', mode: 'inline' } }]);
   });
 });

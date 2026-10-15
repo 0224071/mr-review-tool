@@ -51,6 +51,8 @@ interface ReviewCommentsListProps {
     index?: number
   ) => void;
   publishStates?: Record<number, ReviewPublishState>;
+  /** 有發布作業進行中時停用發布／重試按鈕 */
+  isPublishing?: boolean;
   /** 依本地紀錄與 MR 現有留言判斷的已發布意見 */
   publishedMatches?: Record<number, PublishedMatch>;
   isGitLabConfigured?: boolean;
@@ -105,6 +107,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
   diffFiles = [],
   onPublishSingle,
   publishStates = {},
+  isPublishing = false,
   publishedMatches = {},
   selectedIndices: controlledSelectedIndices,
   onSelectIndicesChange,
@@ -558,7 +561,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                             originalIndex
                           )
                         }
-                        disabled={isSending}
+                        disabled={isSending || isPublishing}
                         className="p-1 rounded text-gitlab hover:text-gitlab-hover hover:bg-gitlab-subtle transition-colors disabled:opacity-40"
                         title={isPublished ? '已發布過，再次發布會重複' : '發布此則至 GitLab'}
                         aria-label="發布單則"
@@ -758,30 +761,55 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                     </span>
                   )}
 
+                  {pubState?.status === 'published' && pubState.mode === 'general' && (
+                    <span className="px-1.5 py-0.5 rounded font-medium bg-surface-muted text-muted-dark">
+                      以一般留言發布
+                    </span>
+                  )}
+
                   {pubState?.status === 'published' && pubState.fallbackReason && (
                     <span
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium bg-amber-50 text-amber-800 border border-amber-200"
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium bg-warning-subtle text-warning-text border border-warning-border"
                       title={pubState.fallbackReason}
                     >
-                      <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                      <AlertTriangle className="w-3 h-3 text-warning shrink-0" />
                       <span>{pubState.fallbackReason}</span>
                     </span>
                   )}
 
                   {isSending && (
-                    <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-medium">
+                    <span role="status" className="text-warning-text bg-warning-subtle px-1.5 py-0.5 rounded font-medium">
                       發布中...
                     </span>
                   )}
 
                   {isError && (
                     <span
-                      className="text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded font-medium flex items-center gap-1"
-                      title={pubState?.errorMessage}
+                      role="alert"
+                      className="text-danger-text bg-danger-subtle px-1.5 py-0.5 rounded font-medium inline-flex items-center gap-1 max-w-full"
                     >
-                      <XCircle className="w-3 h-3 text-rose-600" />
-                      發布失敗
+                      <XCircle className="w-3 h-3 text-danger shrink-0" />
+                      <span className="break-all">發布失敗：{pubState?.errorMessage || '未知錯誤'}</span>
                     </span>
+                  )}
+
+                  {isError && onPublishSingle && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onPublishSingle(
+                          review,
+                          draftEdits[originalIndex]?.comment,
+                          draftEdits[originalIndex]?.suggestion,
+                          originalIndex
+                        )
+                      }
+                      disabled={isPublishing}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold text-gitlab border border-gitlab-border bg-gitlab-subtle hover:bg-surface disabled:opacity-40"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      重試
+                    </button>
                   )}
 
                   {isDraftModified && !isPublished && (

@@ -51,6 +51,8 @@ interface AnalysisResultViewProps {
     }>
   ) => void;
   publishStates?: Record<number, ReviewPublishState>;
+  /** 發布作業進行中：停用發布與重試按鈕，避免重複送出 */
+  isPublishing?: boolean;
   isGitLabConfigured?: boolean;
   onPublishSummaryToMr?: () => void;
   onShareAnalysisToMr?: () => void;
@@ -81,6 +83,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   onPublishSingleReview,
   onPublishBatchReviews,
   publishStates = {},
+  isPublishing = false,
   isGitLabConfigured = false,
   onPublishSummaryToMr,
   onShareAnalysisToMr,
@@ -243,6 +246,23 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
       index: idx,
     }));
     onPublishBatchReviews(items);
+  };
+
+  // 上次發布失敗的項目，一次重試
+  const failedIndices = Object.entries(publishStates)
+    .filter(([, state]) => state.status === 'error')
+    .map(([idx]) => Number(idx))
+    .filter((idx) => result.reviews[idx]);
+  const handleRetryFailed = () => {
+    if (!onPublishBatchReviews || failedIndices.length === 0) return;
+    onPublishBatchReviews(
+      failedIndices.map((idx) => ({
+        review: result.reviews[idx],
+        customComment: draftEdits[idx]?.comment,
+        customSuggestion: draftEdits[idx]?.suggestion,
+        index: idx,
+      }))
+    );
   };
 
   // Parse MR IID if connected
@@ -483,6 +503,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
             diffFiles={diffFiles}
             onPublishSingle={onPublishSingleReview}
             publishStates={publishStates}
+            isPublishing={isPublishing}
             publishedMatches={publishedMatches}
             isGitLabConfigured={isGitLabConfigured}
             selectedIndices={selectedIndices}
@@ -732,11 +753,23 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                 )}
               </div>
 
+              {failedIndices.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleRetryFailed}
+                  disabled={isPublishing}
+                  className="px-2.5 py-2 text-xs font-semibold text-danger-subtle bg-danger hover:bg-danger-hover rounded-lg disabled:opacity-40 transition-colors flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>重試失敗 {failedIndices.length} 則</span>
+                </button>
+              )}
+
               {/* The ONE Primary Button: Orange Solid */}
               <button
                 type="button"
                 onClick={handlePublishSelectedBatch}
-                disabled={selectedIndices.size === 0}
+                disabled={selectedIndices.size === 0 || isPublishing}
                 className="px-4 py-2 bg-gitlab hover:bg-gitlab-hover text-white rounded-lg text-xs font-semibold shadow-xs disabled:opacity-40 transition-colors flex items-center gap-1.5 cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />

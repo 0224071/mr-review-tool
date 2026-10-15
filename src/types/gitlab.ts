@@ -76,6 +76,8 @@ export interface ReviewPublishState {
   status: PublishStatus;
   errorMessage?: string;
   discussionId?: string | number;
+  /** 實際發布方式：行內留言、一般留言、行內失敗改發一般留言 */
+  mode?: 'inline' | 'general' | 'stale-fallback';
   /** 行內留言失敗、改發一般留言的原因（取代原始錯誤訊息顯示） */
   fallbackReason?: string;
   editedComment?: string;

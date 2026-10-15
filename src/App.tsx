@@ -24,6 +24,7 @@ import {
   createPublishedRecord,
   defaultSelectedIndices,
   findPublishedMatches,
+  partitionDuplicates,
 } from './core/publish-dedup';
 import {
   buildAnalysisRecord,
@@ -68,7 +69,7 @@ import {
   SUMMARY_TAG,
   updateGitLabNote,
 } from './services/gitlab-api';
-import { publishReviewItem } from './services/review-publisher';
+import { publishReviewBatch } from './services/review-publisher';
 import { AlertCircle, DatabaseZap, Info, Sparkles } from 'lucide-react';
 
 type PublishItem = {
@@ -159,7 +160,7 @@ export default function App() {
   const [draftEdits, setDraftEdits] = useState<DraftEdits>({});
   const [publishedRecords, setPublishedRecords] = useState<PublishedRecord[]>([]);
   const [remoteNotes, setRemoteNotes] = useState<GitLabNote[]>([]);
-  const [duplicateWarning, setDuplicateWarning] = useState<{ count: number; items: PublishItem[] } | null>(null);
+  const [duplicateWarning, setDuplicateWarning] = useState<{ fresh: PublishItem[]; duplicates: PublishItem[] } | null>(null);
 
   // Parse diff on the fly
   const parsedDiff = useMemo(() => {
@@ -644,7 +645,7 @@ export default function App() {
       setIsSettingsOpen(true);
       return;
     }
-    if (!analysisResult || items.length === 0) return;
+    if (!analysisResult || items.length === 0 || isPublishingInProgress) return;
 
     let notes = remoteNotes;
     const targetMrUrl = currentGitLabMr?.web_url || gitlabMrUrl;
@@ -671,12 +672,12 @@ export default function App() {
       }
     });
     const matches = findPublishedMatches(analysisResult.reviews, drafts, publishedRecords, notes);
-    const duplicateCount = items.filter((item) => matches[item.index]).length;
-    if (duplicateCount > 0) {
-      setDuplicateWarning({ count: duplicateCount, items });
+    const { fresh, duplicates } = partitionDuplicates(items, matches);
+    if (duplicates.length > 0) {
+      setDuplicateWarning({ fresh, duplicates });
       return;
     }
-    openPublishModal(items);
+    openPublishModal(fresh);
   };
 
   // Stage 2: Single Review Comment Publish Trigger
@@ -818,49 +819,61 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         // 使用產生目前結果時的 diff_refs，行號才會對到同一個版本
         const diffRefs = resultDiffRefs ?? currentGitLabMr?.diff_refs;
 
-        for (const item of publishModalConfig.itemsToPublish) {
-          // Update status to sending
-          setPublishStates((prev) => ({
-            ...prev,
-            [item.index]: { status: 'sending' },
-          }));
-
-          const commentText = item.customComment || item.review.comment;
-          const suggestionText = item.customSuggestion || item.review.suggestion;
-
-          try {
-            const res = await publishReviewItem(
-              {
-                baseUrl: parsedUrl.baseUrl,
-                token: settings.gitlabToken,
-                projectPath: parsedUrl.projectPath,
-                mrIid: parsedUrl.mrIid,
-              },
-              item.review,
-              commentText,
-              suggestionText,
-              diffRefs
-            );
-
-            setPublishStates((prev) => ({
-              ...prev,
-              [item.index]: {
-                status: 'published',
-                discussionId: res.discussionId,
-                fallbackReason: res.fallbackReason,
-              },
-            }));
-            markPublished(item, commentText, suggestionText, res.discussionId);
-          } catch (itemErr: unknown) {
-            const errDetail = itemErr instanceof Error ? itemErr.message : String(itemErr);
-            setPublishStates((prev) => ({
-              ...prev,
-              [item.index]: {
-                status: 'error',
-                errorMessage: errDetail,
-              },
-            }));
+        const items = publishModalConfig.itemsToPublish;
+        const byIndex = new Map(items.map((item) => [item.index, item]));
+        const outcomes = await publishReviewBatch(
+          {
+            baseUrl: parsedUrl.baseUrl,
+            token: settings.gitlabToken,
+            projectPath: parsedUrl.projectPath,
+            mrIid: parsedUrl.mrIid,
+          },
+          items.map((item) => ({
+            index: item.index,
+            review: item.review,
+            comment: item.customComment || item.review.comment,
+            suggestion: item.customSuggestion || item.review.suggestion,
+          })),
+          diffRefs,
+          {
+            onStart: (index) => setPublishStates((prev) => ({ ...prev, [index]: { status: 'sending' } })),
+            onDone: (outcome) => {
+              if (outcome.ok) {
+                const { result } = outcome;
+                setPublishStates((prev) => ({
+                  ...prev,
+                  [outcome.index]: {
+                    status: 'published',
+                    discussionId: result.discussionId,
+                    mode: result.mode,
+                    fallbackReason: result.fallbackReason,
+                  },
+                }));
+                const item = byIndex.get(outcome.index);
+                if (item) {
+                  markPublished(
+                    item,
+                    item.customComment || item.review.comment,
+                    item.customSuggestion || item.review.suggestion,
+                    result.discussionId
+                  );
+                }
+              } else {
+                setPublishStates((prev) => ({
+                  ...prev,
+                  [outcome.index]: { status: 'error', errorMessage: outcome.error },
+                }));
+              }
+            },
           }
+        );
+        const failed = outcomes.filter((o) => !o.ok).length;
+        if (outcomes.length > 1 || failed > 0) {
+          setInfoMessage(
+            failed > 0
+              ? `已發布 ${outcomes.length - failed} 則，失敗 ${failed} 則；失敗的項目可在清單中按「重試」。`
+              : `已發布 ${outcomes.length} 則審查意見。`
+          );
         }
       }
     } catch (generalErr: unknown) {
@@ -942,18 +955,22 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
 
         {/* Info / Notice notification banner if any */}
         {infoMessage && (
-          <div className="mb-4 p-4 bg-sky-50 border border-sky-200 rounded-xl text-sky-900 text-xs flex items-start justify-between gap-3 shadow-xs animate-in fade-in duration-150">
+          <div
+            role="status"
+            className="mb-4 p-4 bg-primary-subtle border border-primary-border rounded-xl text-ink text-xs flex items-start justify-between gap-3 shadow-xs animate-in fade-in duration-150"
+          >
             <div className="flex items-start gap-2">
-              <Info className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
+              <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
               <div>
-                <p className="font-semibold text-sky-950">系統提示</p>
-                <p className="mt-0.5 text-sky-800">{infoMessage}</p>
+                <p className="font-semibold text-ink">系統提示</p>
+                <p className="mt-0.5 text-muted-dark">{infoMessage}</p>
               </div>
             </div>
             <button
               type="button"
               onClick={() => setInfoMessage(null)}
-              className="text-sky-500 hover:text-sky-700 font-bold px-1"
+              aria-label="關閉提示"
+              className="text-primary hover:text-primary-hover font-bold px-1"
             >
               ✕
             </button>
@@ -1080,6 +1097,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
                 onPublishSingleReview={handlePublishSingleReview}
                 onPublishBatchReviews={handlePublishBatchReviews}
                 publishStates={publishStates}
+                isPublishing={isPublishingInProgress}
                 isGitLabConfigured={!!settings.gitlabToken}
                 onPublishSummaryToMr={handlePublishSummaryToMr}
                 onShareAnalysisToMr={handleShareAnalysisToMr}
@@ -1144,6 +1162,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         mrInfo={currentGitLabMr}
         mrUrl={currentGitLabMr?.web_url || gitlabMrUrl}
         itemsToPublish={publishModalConfig.itemsToPublish}
+        diffRefs={resultDiffRefs ?? currentGitLabMr?.diff_refs}
         isPublishingSummary={publishModalConfig.isPublishingSummary}
         summaryTitle={analysisResult?.title}
         isPublishing={isPublishingInProgress}
@@ -1152,12 +1171,27 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
       {/* 6. 重複發布警告（橘色），按「仍要發布」才進入原本的發布確認 */}
       <ConfirmDialog
         open={!!duplicateWarning}
-        title={`有 ${duplicateWarning?.count ?? 0} 則已發布過（依本地紀錄與 MR 現有留言比對），確定要重複發布？`}
-        body="重複發布會在 MR 上出現相同的留言。"
-        confirmLabel="仍要發布"
+        title={`有 ${duplicateWarning?.duplicates.length ?? 0} 則已發布過（依本地紀錄與 MR 現有留言比對）`}
+        body={
+          duplicateWarning && duplicateWarning.fresh.length > 0
+            ? `預設略過已發布的意見，只發布其餘 ${duplicateWarning.fresh.length} 則。重複發布會在 MR 上出現相同的留言。`
+            : '重複發布會在 MR 上出現相同的留言。'
+        }
+        confirmLabel={
+          duplicateWarning && duplicateWarning.fresh.length > 0
+            ? `只發布未發布的 ${duplicateWarning.fresh.length} 則`
+            : '仍要重複發布'
+        }
+        secondaryLabel={duplicateWarning && duplicateWarning.fresh.length > 0 ? '仍要全部發布' : undefined}
+        onSecondary={() => {
+          const items = duplicateWarning ? [...duplicateWarning.fresh, ...duplicateWarning.duplicates] : [];
+          setDuplicateWarning(null);
+          openPublishModal(items.sort((a, b) => a.index - b.index));
+        }}
         onCancel={() => setDuplicateWarning(null)}
         onConfirm={() => {
-          const items = duplicateWarning?.items ?? [];
+          if (!duplicateWarning) return;
+          const items = duplicateWarning.fresh.length > 0 ? duplicateWarning.fresh : duplicateWarning.duplicates;
           setDuplicateWarning(null);
           openPublishModal(items);
         }}
