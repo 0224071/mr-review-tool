@@ -11,6 +11,7 @@ import {
 import { GitLabDiffRefs, GitLabMergeRequestInfo } from '../types/gitlab';
 import { MRReviewItem } from '../types/review';
 import { plannedPublishMode } from '../services/review-publisher';
+import { hasSuggestion, resolveEffectiveSuggestion } from '../core/review-text';
 
 interface PublishConfirmationModalProps {
   isOpen: boolean;
@@ -139,7 +140,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
               <ol className="divide-y divide-surface-border border border-surface-border rounded-lg overflow-hidden max-h-72 overflow-y-auto">
                 {itemsToPublish.map(({ review, customComment, customSuggestion }, idx) => {
                   const mode = plannedPublishMode(review, diffRefs);
-                  const suggestion = customSuggestion || review.suggestion;
+                  const suggestion = resolveEffectiveSuggestion(customSuggestion, review.suggestion);
                   return (
                     <li key={idx} className="p-2.5 bg-surface space-y-1">
                       <div className="flex items-center justify-between gap-2">
@@ -162,7 +163,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
                         {describePublishMode(review, diffRefs)}
                       </div>
                       <p className="text-ink whitespace-pre-wrap break-words">{customComment || review.comment}</p>
-                      {suggestion?.trim() && (
+                      {hasSuggestion(suggestion) && (
                         <p className="text-muted whitespace-pre-wrap break-words font-mono text-[11px]">
                           建議：{suggestion}
                         </p>

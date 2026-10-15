@@ -63,6 +63,12 @@ describe('發布確認對話框', () => {
     expect(renderModal([{ review: review() }], REFS)).toContain('建議：');
   });
 
+  it('草稿把建議清空時不顯示 AI 原本的建議', () => {
+    const html = renderModal([{ review: review(), customSuggestion: '' }, { review: review({ file: 'src/b.ts' }), customSuggestion: '  ' }], REFS);
+    expect(html).not.toContain('建議：');
+    expect(html).not.toContain('加上 Math.max(0, discount)');
+  });
+
   it('describePublishMode：缺 diff_refs 或沒有行號時說明原因', () => {
     expect(describePublishMode(review(), undefined)).toBe('一般留言（缺少 diff 版本資訊）');
     expect(describePublishMode(review({ line: null, newLine: null }), REFS)).toBe('一般留言（沒有行號）');
