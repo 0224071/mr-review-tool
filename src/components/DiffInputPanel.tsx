@@ -261,30 +261,19 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
             {staleSharedAnalysis && (
               <div
                 role="status"
-                className="p-2.5 bg-warning-subtle border border-warning-border rounded-lg space-y-1.5 animate-in fade-in duration-200 text-xs"
+                className="p-2.5 bg-warning-subtle border border-warning-border rounded-lg animate-in fade-in duration-200 text-xs flex flex-col gap-1.5 sm:grid sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-x-2"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-semibold text-warning-text flex items-center gap-1 min-w-0">
-                    <Users className="w-3.5 h-3.5 text-warning shrink-0" />
-                    MR 上的共享分析報告已過期，未載入
-                  </span>
-                  {/* 與新 commit 提示列的「抓最新內容重新分析」相同：先重新抓 MR 與 diff，再呼叫 AI 分析 */}
-                  <button
-                    type="button"
-                    onClick={onReanalyze}
-                    disabled={isLoading || isFetchingGitLab || !rawDiff.trim()}
-                    className="text-[11px] bg-surface hover:bg-warning-subtle text-warning-text border border-warning-border px-2 py-0.5 rounded-md font-semibold shrink-0 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Sparkles className="w-3 h-3" />
-                    抓最新內容重新分析
-                  </button>
-                </div>
-                <p className="text-[11px] text-warning-text">
+                {/* 手機：由上到下為標題、作者、內文、commit、按鈕（獨立一列、全寬）；sm 以上按鈕以 grid 放回標題列右側。只渲染一顆按鈕，DOM 順序與手機視覺順序相同 */}
+                <span className="font-semibold text-warning-text flex items-center gap-1 min-w-0">
+                  <Users className="w-3.5 h-3.5 text-warning shrink-0" />
+                  MR 上的共享分析報告已過期，未載入
+                </span>
+                <p className="sm:col-span-2 text-[11px] text-warning-text">
                   由 <AuthorName author={staleSharedAnalysis.author} /> 於{' '}
                   {formatYmd(staleSharedAnalysis.createdAt)} 發布
                 </p>
                 {/* 句尾片語不拆行：窄螢幕上「準。」不會單獨掉到下一行 */}
-                <p className="text-[11px] text-warning-text leading-snug text-pretty">
+                <p className="sm:col-span-2 text-[11px] text-warning-text leading-snug text-pretty">
                   {staleSharedAnalysis.sharedHeadSha ? (
                     <>
                       這份報告分析完後，MR 又有新的 commit，<span className="whitespace-nowrap">內容可能已經不準。</span>
@@ -297,13 +286,23 @@ export const DiffInputPanel: React.FC<DiffInputPanelProps> = ({
                   )}
                 </p>
                 {staleSharedAnalysis.sharedHeadSha && (
-                  <p className="text-[10px] text-muted font-mono break-all">
+                  <p className="sm:col-span-2 text-[10px] text-muted font-mono break-all">
                     報告 {staleSharedAnalysis.sharedHeadSha.slice(0, 8)}
                     {staleSharedAnalysis.currentHeadSha
                       ? ` → 目前 ${staleSharedAnalysis.currentHeadSha.slice(0, 8)}`
                       : ' · 無法取得 MR 目前的版本'}
                   </p>
                 )}
+                {/* 與新 commit 提示列的「抓最新內容重新分析」相同：先重新抓 MR 與 diff，再呼叫 AI 分析 */}
+                <button
+                  type="button"
+                  onClick={onReanalyze}
+                  disabled={isLoading || isFetchingGitLab || !rawDiff.trim()}
+                  className="text-[11px] bg-surface hover:bg-warning-subtle text-warning-text border border-warning-border px-2 py-1.5 sm:py-0.5 rounded-md font-semibold shrink-0 flex items-center justify-center gap-1 w-full sm:w-auto sm:row-start-1 sm:col-start-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  抓最新內容重新分析
+                </button>
               </div>
             )}
 

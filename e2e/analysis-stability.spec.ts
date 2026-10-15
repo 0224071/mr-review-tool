@@ -154,6 +154,34 @@ async function renderedLines(locator: Locator): Promise<string[]> {
   });
 }
 
+/** 過期卡片內各區塊的位置（標題、內文、commit hash、按鈕）與卡片內容寬度 */
+async function staleCardLayout(card: Locator) {
+  return card.evaluate((el) => {
+    const rect = (node: Element | null | undefined) => {
+      if (!node) throw new Error('找不到過期卡片的區塊');
+      const r = node.getBoundingClientRect();
+      return {top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width};
+    };
+    const children = Array.from(el.children);
+    const byText = (text: string) => children.find((c) => (c.textContent ?? '').includes(text));
+    const style = getComputedStyle(el);
+    const cardRect = el.getBoundingClientRect();
+    return {
+      title: rect(byText('共享分析報告已過期')),
+      body: rect(byText('這份報告分析完後')),
+      hash: rect(byText('→ 目前')),
+      button: rect(el.querySelector('button')),
+      cardBottom: cardRect.bottom,
+      cardContentWidth:
+        cardRect.width -
+        parseFloat(style.paddingLeft) -
+        parseFloat(style.paddingRight) -
+        parseFloat(style.borderLeftWidth) -
+        parseFloat(style.borderRightWidth),
+    };
+  });
+}
+
 // 留言時間 2026-10-01T08:00:00Z 在台北時區為 2026/10/1
 test.use({timezoneId: 'Asia/Taipei'});
 
@@ -278,6 +306,27 @@ test.describe('390 寬度的斷行', () => {
     expect(blockedRequests).toEqual([]);
   });
 
+  test('過期卡片：按鈕在 commit hash 之下獨立一列、接近全寬；標題只有一行', async ({page, blockedRequests}) => {
+    await mockMr(page, {headSha: NEW_HEAD_SHA, notes: [note(sharedNoteBody({headSha: OLD_HEAD_SHA}))]});
+    await page.goto('/');
+    await saveFakeSettings(page, {aiKey: false});
+    await fetchMr(page);
+
+    const card = staleSharedCard(page);
+    const button = card.getByRole('button', {name: '抓最新內容重新分析', exact: true});
+    await expect(button).toBeVisible();
+    // 只有一顆按鈕：名稱唯一，無障礙樹不會出現重複的按鈕
+    await expect(page.getByRole('button', {name: '抓最新內容重新分析', exact: true})).toHaveCount(1);
+    const layout = await staleCardLayout(card);
+    expect(layout.button.top, '按鈕在 commit hash 之下').toBeGreaterThanOrEqual(layout.hash.bottom);
+    expect(layout.button.top, '按鈕在內文之下').toBeGreaterThanOrEqual(layout.body.bottom);
+    expect(layout.button.width, '按鈕寬度接近卡片內容寬').toBeGreaterThanOrEqual(layout.cardContentWidth - 2);
+    expect(layout.cardBottom - layout.button.bottom, '按鈕是卡片最後一列').toBeLessThanOrEqual(16);
+    const titleLines = await renderedLines(card.getByText('MR 上的共享分析報告已過期，未載入'));
+    expect(titleLines, `標題：${JSON.stringify(titleLines)}`).toEqual(['MR 上的共享分析報告已過期，未載入']);
+    expect(blockedRequests).toEqual([]);
+  });
+
   test('第一次共享（MR 上沒有既有留言）：確認視窗維持藍框，沒有黃框', async ({page, blockedRequests}) => {
     await mockMr(page, {headSha: OLD_HEAD_SHA, notes: []});
     await mockGemini(page);
@@ -295,6 +344,29 @@ test.describe('390 寬度的斷行', () => {
     await expect(dialog.locator('.bg-warning-subtle')).toHaveCount(0);
     await expect(dialog.getByRole('button', {name: '確認共享（新增 1 則留言）'})).toBeVisible();
     await dialog.getByRole('button', {name: '取消'}).click();
+    expect(blockedRequests).toEqual([]);
+  });
+});
+
+test.describe('1440 寬度的過期卡片', () => {
+  test.use({viewport: {width: 1440, height: 900}});
+
+  test('按鈕維持在標題列右側（與標題同一 y 範圍）', async ({page, blockedRequests}) => {
+    await mockMr(page, {headSha: NEW_HEAD_SHA, notes: [note(sharedNoteBody({headSha: OLD_HEAD_SHA}))]});
+    await page.goto('/');
+    await saveFakeSettings(page, {aiKey: false});
+    await fetchMr(page);
+
+    const card = staleSharedCard(page);
+    await expect(card.getByRole('button', {name: '抓最新內容重新分析', exact: true})).toBeVisible();
+    await expect(page.getByRole('button', {name: '抓最新內容重新分析', exact: true})).toHaveCount(1);
+    const layout = await staleCardLayout(card);
+    const titleCenter = (layout.title.top + layout.title.bottom) / 2;
+    expect(titleCenter, '標題中線落在按鈕的 y 範圍內').toBeGreaterThanOrEqual(layout.button.top);
+    expect(titleCenter).toBeLessThanOrEqual(layout.button.bottom);
+    expect(layout.button.left, '按鈕在標題右側').toBeGreaterThanOrEqual(layout.title.left);
+    expect(layout.button.bottom, '按鈕在作者／內文之上').toBeLessThanOrEqual(layout.body.top);
+    expect(layout.button.width, '桌機按鈕不是全寬').toBeLessThan(layout.cardContentWidth * 0.8);
     expect(blockedRequests).toEqual([]);
   });
 });
