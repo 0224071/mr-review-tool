@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PublishConfirmationModal, describePublishMode } from './PublishConfirmationModal';
-import { ReviewCommentsList } from './ReviewCommentsList';
+import { ReviewCommentsList, runUnlessPublishing } from './ReviewCommentsList';
 import { ConfirmDialog } from './ConfirmDialog';
 import { MRReviewItem } from '../types/review';
 import { GitLabDiffRefs, ReviewPublishState } from '../types/gitlab';
@@ -57,6 +57,12 @@ describe('發布確認對話框', () => {
     expect(html).toContain('確認發送 (2 則意見)');
   });
 
+  it('建議為空（或只有空白）時不顯示「建議：」整行', () => {
+    const html = renderModal([{ review: review({ suggestion: '' }) }, { review: review({ file: 'src/b.ts', suggestion: '  \n ' }) }], REFS);
+    expect(html).not.toContain('建議：');
+    expect(renderModal([{ review: review() }], REFS)).toContain('建議：');
+  });
+
   it('describePublishMode：缺 diff_refs 或沒有行號時說明原因', () => {
     expect(describePublishMode(review(), undefined)).toBe('一般留言（缺少 diff 版本資訊）');
     expect(describePublishMode(review({ line: null, newLine: null }), REFS)).toBe('一般留言（沒有行號）');
@@ -69,10 +75,14 @@ describe('發布確認對話框', () => {
   });
 });
 
-const renderList = (publishStates: Record<number, ReviewPublishState>, isPublishing = false) =>
+const renderList = (
+  publishStates: Record<number, ReviewPublishState>,
+  isPublishing = false,
+  reviews: MRReviewItem[] = [review(), review({ file: 'src/b.ts', comment: '第二則意見內容', lineVerified: false })]
+) =>
   renderToStaticMarkup(
     <ReviewCommentsList
-      reviews={[review(), review({ file: 'src/b.ts', comment: '第二則意見內容', lineVerified: false })]}
+      reviews={reviews}
       groups={[]}
       selectedGroupId={null}
       onPublishSingle={() => {}}
@@ -104,6 +114,26 @@ describe('清單上每則發布結果', () => {
     expect(html).not.toContain('重試');
   });
 
+  it('發布進行中時停用單則發布按鈕', () => {
+    const html = renderList({}, true);
+    expect(html.match(/<button[^>]*disabled=""[^>]*aria-label="發布單則"/g)).toHaveLength(2);
+    const idle = renderList({}, false);
+    expect(idle).toMatch(/aria-label="發布單則"/);
+    expect(idle).not.toMatch(/<button[^>]*disabled=""[^>]*aria-label="發布單則"/);
+  });
+
+  it('runUnlessPublishing：發布進行中時忽略單則發布／重試的點擊', () => {
+    const calls: string[] = [];
+    runUnlessPublishing(true, () => calls.push('blocked'));
+    runUnlessPublishing(false, () => calls.push('ok'));
+    expect(calls).toEqual(['ok']);
+  });
+
+  it('建議為空時卡片不顯示「修改建議」區塊', () => {
+    expect(renderList({}, false, [review({ suggestion: '' })])).not.toContain('修改建議：');
+    expect(renderList({}, false, [review()])).toContain('修改建議：');
+  });
+
   it('發布中：顯示狀態', () => {
     expect(renderList({ 1: { status: 'sending' } })).toContain('發布中...');
   });
@@ -124,5 +154,35 @@ describe('重複發布警告', () => {
     );
     expect(html).toContain('只發布未發布的 2 則');
     expect(html).toContain('仍要全部發布');
+  });
+
+  it('cancelIsPrimary：預設 focus 在「取消」，發布類按鈕不搶 focus', () => {
+    const html = renderToStaticMarkup(
+      <ConfirmDialog
+        open
+        cancelIsPrimary
+        title="有 1 則已發布過"
+        confirmLabel="只發布未發布的 2 則"
+        secondaryLabel="仍要全部發布"
+        onSecondary={() => {}}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    const buttons = html.match(/<button[^>]*>[^<]*<\/button>/g) ?? [];
+    const focused = buttons.filter((b) => b.includes('autofocus'));
+    expect(focused).toHaveLength(1);
+    expect(focused[0]).toContain('>取消<');
+    expect(focused[0]).toContain('bg-gitlab');
+    expect(buttons.find((b) => b.includes('只發布未發布的 2 則'))).not.toContain('bg-gitlab');
+  });
+
+  it('未設定 cancelIsPrimary（刪除紀錄）時維持 focus 在確認按鈕', () => {
+    const html = renderToStaticMarkup(
+      <ConfirmDialog open danger title="刪除這筆紀錄？" confirmLabel="刪除" onConfirm={() => {}} onCancel={() => {}} />
+    );
+    const focused = (html.match(/<button[^>]*>[^<]*<\/button>/g) ?? []).filter((b) => b.includes('autofocus'));
+    expect(focused).toHaveLength(1);
+    expect(focused[0]).toContain('>刪除<');
   });
 });

@@ -687,6 +687,8 @@ export default function App() {
     customSuggestion?: string,
     index?: number
   ) => {
+    // 單則發布與重試入口：有發布作業進行中時忽略
+    if (isPublishingInProgress) return;
     void requestPublishReviews([
       {
         review,
@@ -1168,13 +1170,14 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         isPublishing={isPublishingInProgress}
       />
 
-      {/* 6. 重複發布警告（橘色），按「仍要發布」才進入原本的發布確認 */}
+      {/* 6. 重複發布警告（橘色）：預設 focus「取消」，按發布類按鈕才進入原本的發布確認 */}
       <ConfirmDialog
         open={!!duplicateWarning}
+        cancelIsPrimary
         title={`有 ${duplicateWarning?.duplicates.length ?? 0} 則已發布過（依本地紀錄與 MR 現有留言比對）`}
         body={
           duplicateWarning && duplicateWarning.fresh.length > 0
-            ? `預設略過已發布的意見，只發布其餘 ${duplicateWarning.fresh.length} 則。重複發布會在 MR 上出現相同的留言。`
+            ? `可略過已發布的意見，只發布其餘 ${duplicateWarning.fresh.length} 則。重複發布會在 MR 上出現相同的留言。`
             : '重複發布會在 MR 上出現相同的留言。'
         }
         confirmLabel={
