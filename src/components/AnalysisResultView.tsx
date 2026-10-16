@@ -17,6 +17,7 @@ import {
   ExternalLink,
   GitCommitHorizontal,
   RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 import { DiffFile } from '../types/diff';
 import { MRAnalysisResult, MRReviewItem } from '../types/review';
@@ -31,6 +32,11 @@ import { DraftEdits } from '../core/history-store';
 import { filterPublishableItems } from '../core/review-text';
 import { PublishedMatch } from '../core/publish-dedup';
 import { DisabledReasonText, TapForReason, useDisabledReason } from './DisabledReason';
+
+/** 按鈕內的小 spinner（讀取留言中…），顏色由呼叫端指定 */
+const Spinner: React.FC<{ className: string }> = ({ className }) => (
+  <span aria-hidden="true" className={`inline-block w-3.5 h-3.5 border-2 rounded-full animate-spin shrink-0 ${className}`} />
+);
 
 /** 手機點到停用的「發布已選 0 則」時顯示的原因 */
 export const PUBLISH_NONE_SELECTED_REASON = '還沒有勾選意見：先在清單勾選要發布的意見';
@@ -53,7 +59,9 @@ interface AnalysisResultViewProps {
       customComment?: string;
       customSuggestion?: string;
       index: number;
-    }>
+    }>,
+    /** 「發布已選」或「重試失敗 N 則」：讀留言失敗後重試時依此重新組出目前要發布的意見 */
+    source?: 'selected' | 'failed'
   ) => void;
   publishStates?: Record<number, ReviewPublishState>;
   /** 發布作業進行中（含發布前讀留言、共享分析）：停用所有發布相關按鈕，避免重複送出 */
@@ -64,6 +72,12 @@ interface AnalysisResultViewProps {
   isSharingToMr?: boolean;
   /** 共享分析前正在用 GET 讀取 MR 留言（尚未寫入）：發布按鈕顯示「讀取留言中」 */
   isReadingShareNotes?: boolean;
+  /** 發布意見前正在讀取 MR 留言：「發布已選」顯示「讀取留言中…」 */
+  isReadingPublishNotes?: boolean;
+  /** 發布前讀取 MR 留言失敗的原因（已中止、沒有送出任何留言）；顯示在發布列上方並提供重試 */
+  notesReadError?: string | null;
+  onRetryNotesRead?: () => void;
+  onDismissNotesReadError?: () => void;
   isSummaryPublished?: boolean;
   isSharedToMrPublished?: boolean;
   mrUrl?: string;
@@ -100,6 +114,10 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   onShareAnalysisToMr,
   isSharingToMr = false,
   isReadingShareNotes = false,
+  isReadingPublishNotes = false,
+  notesReadError = null,
+  onRetryNotesRead,
+  onDismissNotesReadError,
   isSummaryPublished = false,
   isSharedToMrPublished = false,
   mrUrl = '',
@@ -269,7 +287,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   // Batch publish trigger
   const handlePublishSelectedBatch = () => {
     if (!onPublishBatchReviews || publishableSelectedCount === 0) return;
-    onPublishBatchReviews(publishableSelectedItems);
+    onPublishBatchReviews(publishableSelectedItems, 'selected');
   };
 
   // 上次發布失敗的項目，一次重試
@@ -285,7 +303,8 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
         customComment: draftEdits[idx]?.comment,
         customSuggestion: draftEdits[idx]?.suggestion,
         index: idx,
-      }))
+      })),
+      'failed'
     );
   };
 
@@ -423,8 +442,8 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
             >
               {isReadingShareNotes ? (
                 <>
-                  <div className="w-3.5 h-3.5 border-2 border-slate-300 border-t-gitlab rounded-full animate-spin" />
-                  <span>讀取留言中...</span>
+                  <Spinner className="border-slate-300 border-t-gitlab" />
+                  <span>讀取留言中…</span>
                 </>
               ) : (
                 <>
@@ -470,7 +489,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                   className="w-full text-left p-2 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50 border-t border-slate-100"
                 >
                   <div className="font-semibold text-slate-800 flex items-center justify-between">
-                    <span>{isReadingShareNotes ? '讀取留言中...' : '共享分析（免 Key 共享）'}</span>
+                    <span>{isReadingShareNotes ? '讀取留言中…' : '共享分析（免 Key 共享）'}</span>
                     {isSharedToMrPublished && (
                       <span className="text-[10px] text-emerald-600 font-bold">
                         {publishNotice ? `已共享（${publishNotice}）` : '已共享'}
@@ -766,6 +785,42 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
           {publishBarHint && (
             <DisabledReasonText message={publishBarHint.message} className="absolute bottom-full right-0 mb-2 shadow-md" />
           )}
+          {/* 發布前讀不到 MR 留言：已中止、沒有送出任何留言；就在發布按鈕上方顯示原因，只提供重試（不提供略過） */}
+          {notesReadError && (
+            <div
+              role="alert"
+              className="mb-2 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs flex items-start justify-between gap-3 shadow-md animate-in fade-in duration-150"
+            >
+              <div className="flex items-start gap-2 min-w-0">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="font-semibold text-rose-900">已中止發布</p>
+                  <p className="mt-0.5 break-all">{notesReadError}</p>
+                  {onRetryNotesRead && (
+                    <button
+                      type="button"
+                      onClick={onRetryNotesRead}
+                      disabled={isPublishing}
+                      className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-surface border border-rose-300 text-rose-800 hover:bg-rose-100 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      重試
+                    </button>
+                  )}
+                </div>
+              </div>
+              {onDismissNotesReadError && (
+                <button
+                  type="button"
+                  onClick={onDismissNotesReadError}
+                  aria-label="關閉錯誤"
+                  className="text-rose-500 hover:text-rose-700 font-bold px-1"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          )}
           <div className="bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-xl shadow-xl border border-slate-700/80 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
             {/* Left: Selected count & MR info */}
             <div className="flex items-center gap-2 text-xs min-w-0">
@@ -786,9 +841,16 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                   type="button"
                   onClick={() => setIsStickyMoreOpen(!isStickyMoreOpen)}
                   disabled={isPublishing}
-                  className="px-2.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="px-2.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
                 >
-                  {isReadingShareNotes ? '讀取留言中...' : '更多 ▾'}
+                  {isReadingShareNotes ? (
+                    <>
+                      <Spinner className="border-slate-500 border-t-white" />
+                      <span>讀取留言中…</span>
+                    </>
+                  ) : (
+                    '更多 ▾'
+                  )}
                 </button>
 
                 {isStickyMoreOpen && (
@@ -814,7 +876,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                       disabled={isSharingToMr || isPublishing || isSharedToMrPublished}
                       className="w-full text-left p-2 rounded-lg hover:bg-slate-700 transition-colors disabled:opacity-50 border-t border-slate-700"
                     >
-                      <div className="font-semibold">{isReadingShareNotes ? '讀取留言中...' : '共享分析（免 Key 共享）'}</div>
+                      <div className="font-semibold">{isReadingShareNotes ? '讀取留言中…' : '共享分析（免 Key 共享）'}</div>
                       <p className="text-[10px] text-slate-400">隱藏標記回貼 MR 筆記</p>
                     </button>
                   </div>
@@ -844,8 +906,17 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                   disabled={publishableSelectedCount === 0 || isPublishing}
                   className="px-4 py-2 bg-gitlab hover:bg-gitlab-hover text-white rounded-lg text-xs font-semibold shadow-xs disabled:opacity-40 disabled:pointer-events-none transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>發布已選 {publishableSelectedCount} 則</span>
+                  {isReadingPublishNotes ? (
+                    <>
+                      <Spinner className="border-white/40 border-t-white" />
+                      <span>讀取留言中…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>發布已選 {publishableSelectedCount} 則</span>
+                    </>
+                  )}
                 </button>
               </TapForReason>
             </div>

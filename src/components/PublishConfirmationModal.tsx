@@ -47,6 +47,8 @@ interface PublishConfirmationModalProps {
   /** 標註於標題、內容與按鈕（示範模式：「示範，未實際發布」） */
   notice?: string;
   isPublishing: boolean;
+  /** 確認後正在讀取 MR 留言（整體摘要發布前的重複檢查）：確認按鈕顯示「讀取留言中…」 */
+  isReadingNotes?: boolean;
 }
 
 /** 共享確認視窗中說明留言內容的小字 */
@@ -78,6 +80,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
   targetLabel,
   notice,
   isPublishing,
+  isReadingNotes = false,
 }) => {
   if (!isOpen) return null;
 
@@ -315,7 +318,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
             {isPublishing ? (
               <>
                 <div className="w-3.5 h-3.5 border-2 border-surface/30 border-t-surface rounded-full animate-spin" />
-                <span>{share ? '共享中...' : '發布中...'}</span>
+                <span>{isReadingNotes ? '讀取留言中…' : share ? '共享中...' : '發布中...'}</span>
               </>
             ) : (
               <>

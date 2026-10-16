@@ -99,36 +99,39 @@ export function createMemoryStore(initial: HistoryRecord[] = []) {
 
 /**
  * 以 vi.stubGlobal 模擬 GitLab API 的 fetch（用完要 vi.unstubAllGlobals）：
- * MR 資訊、raw diff 與留言的 GET 依參數回應；所有非 GET 請求記進 writes 並回 500（不應該出現）。
+ * MR 資訊、raw diff 與留言的 GET 依參數回應；所有非 GET 請求記進 writes（內文記進 writeBodies）並回 500。
  */
 export function stubGitLabFetch({
   mr,
   rawDiff,
   notes,
 }: {
-  mr: unknown;
+  /** MR 資訊；可依網址回應不同的 MR */
+  mr: unknown | ((url: URL) => unknown);
   rawDiff: string;
-  /** 留言：陣列為成功回應，數字為失敗的 HTTP status；可回傳 Promise 延遲回應 */
-  notes: () => unknown[] | number | Promise<unknown[] | number>;
+  /** 留言：陣列為成功回應，數字為失敗的 HTTP status；可回傳 Promise 延遲回應，可依網址回應不同的 MR */
+  notes: (url: URL) => unknown[] | number | Promise<unknown[] | number>;
 }) {
   const writes: string[] = [];
+  const writeBodies: string[] = [];
   const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = (init?.method ?? 'GET').toUpperCase();
     if (method !== 'GET') {
       writes.push(`${method} ${url.pathname}`);
+      writeBodies.push(typeof init?.body === 'string' ? init.body : '');
       return new Response('{}', { status: 500 });
     }
     if (url.pathname.endsWith('/notes')) {
-      const body = await notes();
+      const body = await notes(url);
       return typeof body === 'number'
         ? new Response('{"message":"FAKE error"}', { status: body })
         : new Response(JSON.stringify(body), { status: 200, headers: { 'x-next-page': '' } });
     }
     if (url.pathname.endsWith('/raw_diffs')) return new Response(rawDiff, { status: 200 });
-    if (/\/merge_requests\/\d+$/.test(url.pathname)) return new Response(JSON.stringify(mr), { status: 200 });
+    if (/\/merge_requests\/\d+$/.test(url.pathname)) return new Response(JSON.stringify(typeof mr === 'function' ? mr(url) : mr), { status: 200 });
     return new Response('{}', { status: 404 });
   });
   vi.stubGlobal('fetch', fetchMock);
-  return { fetchMock, writes };
+  return { fetchMock, writes, writeBodies };
 }

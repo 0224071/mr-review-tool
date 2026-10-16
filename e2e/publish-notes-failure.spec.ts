@@ -82,6 +82,9 @@ const notesError = (page: Page) => page.getByRole('alert').filter({hasText: '沒
 async function expectAborted(page: Page, blockedRequests: string[]) {
   await expect(notesError(page)).toBeVisible();
   await expect(notesError(page).getByRole('button', {name: '重試'})).toBeEnabled();
+  // 原因與重試顯示在發布列（發布按鈕旁）；整頁只有一個「重試」入口
+  await expect(page.getByRole('region', {name: '發布列'}).getByRole('alert')).toContainText('沒有送出任何留言');
+  await expect(page.getByRole('button', {name: '重試', exact: true})).toHaveCount(1);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(blockedRequests, '讀不到留言時不應送出任何非 GET 請求').toEqual([]);
 }
@@ -134,6 +137,30 @@ test('共享報告：讀留言失敗時不開確認、不送出，重試成功�
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('button', {name: /確認共享（覆寫 1 則留言）/})).toBeVisible();
   expect(notes.gets).toBe(before + 1);
+  await dialog.getByRole('button', {name: '取消'}).click();
+  expect(blockedRequests).toEqual([]);
+});
+
+test('發布已選：失敗後改勾選再重試，確認視窗是目前勾選的意見', async ({page, blockedRequests}) => {
+  const notes = await openLoadedResult(page);
+  const boxes = page.getByRole('button', {name: /^勾選此意見：/});
+  await boxes.nth(0).click();
+
+  notes.current = {status: 500};
+  await page.getByRole('button', {name: '發布已選 1 則'}).click();
+  await expectAborted(page, blockedRequests);
+
+  // 改勾第 2 則（取消第 1 則）
+  await boxes.nth(0).click();
+  await boxes.nth(1).click();
+  const secondFile = ((await boxes.nth(1).getAttribute('aria-label')) ?? '').replace('勾選此意見：', '').split(':')[0];
+  const firstFile = ((await boxes.nth(0).getAttribute('aria-label')) ?? '').replace('勾選此意見：', '').split(':')[0];
+  notes.current = {json: []};
+  await notesError(page).getByRole('button', {name: '重試'}).click();
+  const dialog = page.getByRole('dialog', {name: '確認發布審查意見至 GitLab'});
+  await expect(dialog.getByRole('button', {name: /確認發送 \(1 則意見\)/})).toBeVisible();
+  await expect(dialog).toContainText(secondFile);
+  if (firstFile !== secondFile) await expect(dialog).not.toContainText(firstFile);
   await dialog.getByRole('button', {name: '取消'}).click();
   expect(blockedRequests).toEqual([]);
 });

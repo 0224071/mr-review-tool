@@ -17,7 +17,7 @@ import { useSettings } from './hooks/useSettings';
 import { useHistory } from './hooks/useHistory';
 import { useAnalysis } from './hooks/useAnalysis';
 import { usePublish } from './hooks/usePublish';
-import { AlertCircle, DatabaseZap, FlaskConical, Info, RefreshCw, Sparkles } from 'lucide-react';
+import { AlertCircle, DatabaseZap, FlaskConical, Info, Sparkles } from 'lucide-react';
 
 /** 結果標記：「OpenAI · gpt-4.1-mini」；舊結果沒有標記時不顯示 */
 function formatGeneratedBy(result: MRAnalysisResult): string | undefined {
@@ -140,41 +140,6 @@ export default function App({ services }: { services: AppServices }) {
           </div>
         )}
 
-        {/* 發布前讀不到 MR 留言：已中止、沒有送出任何留言；只提供重試（重新讀留言並從頭檢查），不提供略過 */}
-        {publish.notesReadError && (
-          <div
-            role="alert"
-            className="mb-4 p-4 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs flex items-start justify-between gap-3 shadow-xs animate-in fade-in duration-150"
-          >
-            <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold text-rose-900">已中止發布</p>
-                <p className="mt-0.5 break-all">{publish.notesReadError}</p>
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    onClick={publish.retryNotesRead}
-                    disabled={publish.isPublishBusy}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-surface border border-rose-300 text-rose-800 hover:bg-rose-100 font-semibold disabled:opacity-50"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    重試
-                  </button>
-                </div>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={publish.dismissNotesReadError}
-              aria-label="關閉錯誤"
-              className="text-rose-500 hover:text-rose-700 font-bold px-1"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
         {/* Two-Column Responsive Workspace */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Left Column: Diff Input & Controls (5 cols on lg) */}
@@ -261,6 +226,10 @@ export default function App({ services }: { services: AppServices }) {
                 onShareAnalysisToMr={publish.handleShareAnalysisToMr}
                 isSharingToMr={publish.isSharingToMr}
                 isReadingShareNotes={publish.shareStage === 'reading'}
+                isReadingPublishNotes={publish.notesReading === 'reviews'}
+                notesReadError={publish.notesReadError}
+                onRetryNotesRead={publish.retryNotesRead}
+                onDismissNotesReadError={publish.dismissNotesReadError}
                 isSummaryPublished={analysis.isSummaryPublished}
                 isSharedToMrPublished={analysis.isSharedToMrPublished}
                 mrUrl={publish.mrUrl}
@@ -341,6 +310,7 @@ export default function App({ services }: { services: AppServices }) {
         targetLabel={gitlab.targetLabel}
         notice={gitlab.notice}
         isPublishing={publish.isPublishingInProgress}
+        isReadingNotes={publish.notesReading === 'summary'}
       />
 
       {/* 5b. 共享分析確認：說明會新增或覆寫哪一則留言，按確認才寫入 GitLab */}

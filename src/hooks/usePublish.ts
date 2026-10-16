@@ -39,11 +39,23 @@ export interface ShareConfirmState {
 /** 共享分析的進度：讀取 MR 留言（GET，尚未寫入）或寫入分享留言 */
 export type ShareStage = 'reading' | 'writing';
 
-/** 發布前讀取 MR 留言失敗的是哪條發布路徑；按「重試」時依此從頭再跑一次 */
+/**
+ * 發布前讀取 MR 留言失敗的是哪條發布路徑；按「重試」時依此從頭再跑一次。
+ * 只記路徑，不記當時要發布的內容：重試時依「目前」的勾選、草稿與失敗項目重新組出要發布的意見。
+ */
 export type NotesReadRetry =
-  | { kind: 'reviews'; items: PublishItem[] }
+  | { kind: 'selected' }
+  | { kind: 'failed' }
+  /** 單則發布：記哪一則（卡片位置），內文仍取目前草稿 */
+  | { kind: 'single'; index: number }
   | { kind: 'summary' }
   | { kind: 'share' };
+
+/** 意見發布的入口：「發布已選」或「重試失敗 N 則」 */
+export type BatchPublishSource = 'selected' | 'failed';
+
+/** 正在讀 MR 留言的發布路徑：意見（單則／發布已選／重試失敗）、整體摘要、共享報告 */
+export type NotesReadingPath = 'reviews' | 'summary' | 'share';
 
 interface NotesReadFailure {
   message: string;
@@ -76,6 +88,8 @@ export interface UsePublishOptions {
     | 'remoteNotes'
     | 'setRemoteNotes'
     | 'draftEdits'
+    | 'selectedIndices'
+    | 'publishStates'
     | 'publishedRecords'
     | 'setPublishedRecords'
     | 'setSelectedIndices'
@@ -97,6 +111,8 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
     remoteNotes,
     setRemoteNotes,
     draftEdits,
+    selectedIndices,
+    publishStates,
     publishedRecords,
     setPublishedRecords,
     setSelectedIndices,
@@ -131,6 +147,8 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
   const [shareConfirm, setShareConfirm] = useState<ShareConfirmState | null>(null);
   /** 發布前讀取 MR 留言失敗（已中止，沒有送出任何留言） */
   const [notesReadFailure, setNotesReadFailure] = useState<NotesReadFailure | null>(null);
+  /** 意見或整體摘要發布前正在讀 MR 留言（共享報告看 shareStage）；按鈕顯示「讀取留言中…」 */
+  const [notesReading, setNotesReading] = useState<Exclude<NotesReadingPath, 'share'> | null>(null);
   /**
    * 發布作業（從讀留言開始到寫入結束）進行中的同步鎖：state 要等重新 render 才更新，
    * 同一輪連點兩次時靠這個擋下第二次，留言只讀一次。
@@ -160,6 +178,20 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
   /** 要發布的意見內文：草稿優先，清空也不退回 AI 原值 */
   const publishCommentFor = (item: PublishItem) => resolveEffectiveComment(item.customComment, item.review.comment);
 
+  /** 依目前的草稿組出要發布的意見（不在結果中的位置略過） */
+  const buildPublishItems = (indices: Iterable<number>): PublishItem[] =>
+    analysisResult
+      ? Array.from(indices)
+          .filter((index) => analysisResult.reviews[index])
+          .sort((a, b) => a - b)
+          .map((index) => ({
+            review: analysisResult.reviews[index],
+            customComment: draftEdits[index]?.comment,
+            customSuggestion: draftEdits[index]?.suggestion,
+            index,
+          }))
+      : [];
+
   const openPublishModal = (items: PublishItem[]) => {
     setPublishModalConfig({
       isPublishingSummary: false,
@@ -171,7 +203,7 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
   /**
    * 發布前比對本地發布紀錄＋MR 現有留言；有重複時先跳橘色警告，按「仍要發布」才進原本的發布確認。
    */
-  const requestPublishReviews = async (requested: PublishItem[]) => {
+  const requestPublishReviews = async (requested: PublishItem[], retry: NotesReadRetry) => {
     if (!gitlab.isConfigured(settings)) {
       setIsSettingsOpen(true);
       return;
@@ -195,16 +227,18 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
     // 發布前一定要讀到 MR 現有留言才比對重複；讀不到就中止（不改用先前讀到的留言），從這裡開始算發布中
     publishLockRef.current = true;
     setIsPublishingInProgress(true);
+    setNotesReading('reviews');
     setNotesReadFailure(null);
     let notes: GitLabNote[];
     try {
       notes = await gitlab.fetchNotes(target);
     } catch (err: unknown) {
-      failNotesRead(err, { kind: 'reviews', items: requested });
+      failNotesRead(err, retry);
       return;
     } finally {
       publishLockRef.current = false;
       setIsPublishingInProgress(false);
+      setNotesReading(null);
     }
     setRemoteNotes(notes);
 
@@ -235,19 +269,16 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
   ) => {
     // 單則發布與重試入口：有發布作業進行中時忽略
     if (isPublishBusy || publishLockRef.current) return;
-    void requestPublishReviews([
-      {
-        review,
-        customComment,
-        customSuggestion,
-        index: index !== undefined ? index : 0,
-      },
-    ]);
+    const itemIndex = index !== undefined ? index : 0;
+    void requestPublishReviews([{ review, customComment, customSuggestion, index: itemIndex }], {
+      kind: 'single',
+      index: itemIndex,
+    });
   };
 
   // Stage 2: Batch Review Comments Publish Trigger
-  const handlePublishBatchReviews = (items: PublishItem[]) => {
-    void requestPublishReviews(items);
+  const handlePublishBatchReviews = (items: PublishItem[], source: BatchPublishSource = 'selected') => {
+    void requestPublishReviews(items, { kind: source });
   };
 
   // Stage 2: Publish General Summary to MR Note Trigger
@@ -306,11 +337,14 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
 
         // 4. 整體留言去重：送出「整體摘要」前，先讀取 MR notes；讀不到就中止，不送出
         let notes: GitLabNote[];
+        setNotesReading('summary');
         try {
           notes = await gitlab.fetchNotes(target);
         } catch (err: unknown) {
           failNotesRead(err, { kind: 'summary' });
           return;
+        } finally {
+          setNotesReading(null);
         }
         const { sharedNote, summaryNote } = findExistingOverallNote(notes);
 
@@ -517,14 +551,36 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
 
   const cancelDuplicateWarning = () => setDuplicateWarning(null);
 
-  /** 讀留言失敗後按「重試」：重新讀留言並從頭跑該路徑的完整檢查（重複比對、確認視窗） */
+  /**
+   * 讀留言失敗後按「重試」：重新讀留言並從頭跑該路徑的完整檢查（重複比對、確認視窗）。
+   * 意見路徑依「目前」的勾選、草稿與失敗項目重新組出要發布的內容，不沿用失敗當下的內容。
+   */
   const retryNotesRead = () => {
     if (!notesReadError || !notesReadFailure || isPublishBusy || publishLockRef.current) return;
     const { retry } = notesReadFailure;
     setNotesReadFailure(null);
-    if (retry.kind === 'reviews') void requestPublishReviews(retry.items);
-    else if (retry.kind === 'summary') handlePublishSummaryToMr();
-    else void handleShareAnalysisToMr();
+    if (retry.kind === 'summary') {
+      handlePublishSummaryToMr();
+      return;
+    }
+    if (retry.kind === 'share') {
+      void handleShareAnalysisToMr();
+      return;
+    }
+    const indices =
+      retry.kind === 'single'
+        ? [retry.index]
+        : retry.kind === 'selected'
+          ? selectedIndices
+          : Object.entries(publishStates)
+              .filter(([, state]) => state.status === 'error')
+              .map(([index]) => Number(index));
+    const items = buildPublishItems(indices);
+    if (items.length === 0) {
+      setInfoMessage(retry.kind === 'selected' ? '目前沒有勾選要發布的意見。' : '目前沒有要重試的意見。');
+      return;
+    }
+    void requestPublishReviews(items, retry);
   };
 
   const dismissNotesReadError = () => setNotesReadFailure(null);
@@ -540,6 +596,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
     isSharingToMr,
     isPublishBusy,
     shareStage,
+    notesReading,
     notesReadError,
     retryNotesRead,
     dismissNotesReadError,

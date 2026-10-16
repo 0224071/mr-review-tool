@@ -213,7 +213,7 @@ const NOTES_MAX_PAGES = 100;
 
 /**
  * Fetches all MR notes (comments), newest first, following GitLab pagination (x-next-page).
- * 讀不完整就拋錯（任何一頁失敗、回應不是陣列、分頁異常或超過頁數上限），
+ * 讀不完整就拋錯（任何一頁失敗、回應不是 JSON 陣列、分頁異常或超過頁數上限），
  * 呼叫端不會拿到不完整的留言去做重複發布比對。
  */
 export async function fetchGitLabMrNotes(
@@ -233,7 +233,12 @@ export async function fetchGitLabMrNotes(
     if (!res.ok) {
       throw new Error(`讀取 MR 留言失敗 (第 ${page} 頁，${res.status})`);
     }
-    const batch: unknown = await res.json();
+    let batch: unknown;
+    try {
+      batch = await res.json();
+    } catch {
+      throw new Error(`讀取 MR 留言失敗 (第 ${page} 頁回應不是 JSON)`);
+    }
     if (!Array.isArray(batch)) {
       throw new Error(`讀取 MR 留言失敗 (第 ${page} 頁回應格式不正確)`);
     }
@@ -242,12 +247,16 @@ export async function fetchGitLabMrNotes(
     let next: number | null;
     const nextHeader = res.headers.get('x-next-page');
     if (nextHeader !== null) {
-      // 最後一頁的 x-next-page 是空字串
-      const parsed = nextHeader.trim() === '' ? null : parseInt(nextHeader, 10);
-      if (parsed !== null && (Number.isNaN(parsed) || parsed <= page)) {
+      // 最後一頁的 x-next-page 是空字串；其餘必須整串都是數字且恰好是下一頁（'2abc'、跳頁、倒退、重複頁都算異常），
+      // 否則可能漏讀某一頁的留言而誤判沒有重複
+      const trimmed = nextHeader.trim();
+      if (trimmed === '') {
+        next = null;
+      } else if (/^\d+$/.test(trimmed) && Number(trimmed) === page + 1) {
+        next = page + 1;
+      } else {
         throw new Error(`讀取 MR 留言失敗 (第 ${page} 頁的分頁資訊不正確)`);
       }
-      next = parsed;
     } else {
       // 沒有分頁 header（例如被 proxy 拿掉）時，以回傳筆數判斷是否還有下一頁
       next = batch.length === NOTES_PER_PAGE ? page + 1 : null;

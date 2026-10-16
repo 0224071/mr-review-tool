@@ -436,6 +436,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
             const dimClass = `transition-opacity ${dimmed ? 'opacity-50' : ''}`;
             const lineText = displayLineText(review);
             const commentLabelId = `${labelIdPrefix}-comment-${originalIndex}`;
+            const publishedLabelId = `${labelIdPrefix}-published-${originalIndex}`;
             const suggestionLabelId = `${labelIdPrefix}-suggestion-${originalIndex}`;
             const emptyReason = commentEmpty ? EMPTY_COMMENT_REASON : null;
             const showReason = (message: string) => showDisabledHint(originalIndex, message);
@@ -463,11 +464,13 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                         type="button"
                         onClick={() => handleToggleSelect(originalIndex)}
                         disabled={isSending || isPublishing || commentEmpty}
-                        className={`text-slate-400 hover:text-primary disabled:pointer-events-none transition-colors cursor-pointer ${
-                          dimmed ? '' : 'disabled:opacity-40'
-                        }`}
+                        // 停用時變灰並顯示禁止游標；只有內文空了（有原因可說明）時才讓點擊穿透到 TapForReason
+                        className={`text-slate-400 hover:text-primary disabled:cursor-not-allowed transition-colors cursor-pointer ${
+                          emptyReason ? 'disabled:pointer-events-none' : ''
+                        } ${dimmed ? '' : 'disabled:opacity-40'}`}
                         title={commentEmpty ? EMPTY_COMMENT_MESSAGE : isPublished ? '已發布過，勾選將重複發布' : '勾選此意見'}
                         aria-label={`勾選此意見：${review.file}${lineText}`}
+                        aria-describedby={isPublished ? publishedLabelId : undefined}
                         aria-pressed={isSelected}
                       >
                         {isSelected ? (
@@ -478,16 +481,10 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                       </button>
                     </TapForReason>
 
-                    {/* Severity Badge */}
-                    <span
-                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold text-[10px] border shrink-0 mt-0.5 ${sevMeta.badge} ${dimClass}`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${sevMeta.dot}`} />
-                      {sevMeta.label}
-                    </span>
-
+                    {/* 已發布標籤緊接在勾選框旁，勾選框以 aria-describedby 指向它 */}
                     {isPublished && (
                       <span
+                        id={publishedLabelId}
                         className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold text-[10px] border shrink-0 mt-0.5 text-success-text bg-success-subtle border-success-border ${dimClass}`}
                         title={
                           publishedMatch?.source === 'remote'
@@ -499,6 +496,14 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                         已發布
                       </span>
                     )}
+
+                    {/* Severity Badge */}
+                    <span
+                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold text-[10px] border shrink-0 mt-0.5 ${sevMeta.badge} ${dimClass}`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${sevMeta.dot}`} />
+                      {sevMeta.label}
+                    </span>
 
                     {/* File and Line: Toggles inline code diff */}
                     <button
