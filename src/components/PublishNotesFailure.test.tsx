@@ -5,7 +5,8 @@
  * 顯示「沒有送出任何留言」與「重試」；重試會重新讀留言並從頭檢查（走到確認視窗）。
  * 讀留言期間所有發布相關按鈕停用並顯示「讀取留言中…」，連點只讀一次；失敗原因與唯一的「重試」顯示在發布列。
  * 重試依目前的勾選與草稿重新組出要發布的意見；切到另一個 MR 讀不到留言時不沿用前一個 MR 的留言。
- * 已發布意見的勾選框旁有「已發布」標籤。只使用 FAKE- 假值。
+ * 已發布意見的勾選框旁有「已發布」標籤，可勾選重新發布並顯示「將重複發布」；錯誤面板寫出失敗的動作；
+ * 單則發布期間 spinner 在點的那顆單則按鈕上；讀取中／發布中有 aria-live 狀態。只使用 FAKE- 假值。
  */
 import { act } from 'react';
 import { createRoot, Root as ReactRoot } from 'react-dom/client';
@@ -122,7 +123,9 @@ async function selectTwo() {
   expect(findButton('發布已選 2 則').disabled).toBe(false);
 }
 
-const notesError = () => document.querySelector('[role="alert"]');
+/** 發布列上方的讀取失敗面板（卡片上個別發布失敗的 alert 不算） */
+const notesError = () =>
+  Array.from(document.querySelectorAll('[role="alert"]')).find((el) => (el.textContent ?? '').includes('已中止發布')) ?? null;
 /** 發布列上顯示「讀取留言中…」的按鈕 */
 const readingButton = () => findButton(/^讀取留言中…$/, document.querySelector('[aria-label="發布列"]')!);
 const reviews = SAMPLE_ANALYSIS_RESULT.reviews;
@@ -498,5 +501,176 @@ describe('切換 MR 後讀不到新 MR 的留言（#78）', () => {
     await expectAborted();
     expect(bNotesGets()).toBe(before + 1);
     expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+});
+
+const singleButtons = () => buttons().filter((b) => b.getAttribute('aria-label') === '發布單則');
+const liveStatus = () =>
+  Array.from(document.querySelectorAll('[aria-live="polite"]')).map((el) => (el.textContent ?? '').trim()).join('|');
+
+describe('已發布意見可勾選重新發布（#78）', () => {
+  it('勾選框可勾；勾了在卡片上顯示「將重複發布」（不只 tooltip），取消勾選後消失；卡片不變灰', async () => {
+    await openLoadedMr();
+    const box = checkboxes()[0];
+    const card = box.closest<HTMLElement>('div[tabindex="0"]')!;
+    expect(card.textContent).toContain('已發布');
+    expect(card.className).not.toMatch(/opacity-/);
+    expect(box.disabled).toBe(false);
+    expect(card.textContent).not.toContain('將重複發布');
+
+    await click(box);
+    expect(checkboxes()[0].getAttribute('aria-pressed')).toBe('true');
+    const warning = Array.from(card.querySelectorAll('span')).find((el) => el.textContent === '將重複發布');
+    expect(warning).toBeDefined();
+    expect(warning!.className).toContain('text-amber-700');
+    // 勾選框旁依序是「已發布」標籤與「將重複發布」，勾選框兩個都指到
+    expect(checkboxes()[0].getAttribute('aria-describedby')!.split(' ')).toContain(warning!.id);
+    expect(findButton('發布已選 1 則').disabled).toBe(false);
+
+    await click(checkboxes()[0]);
+    expect(card.textContent).not.toContain('將重複發布');
+  });
+
+  it('勾選已發布的意見後「發布已選」會跳重複警告（不會略過）', async () => {
+    await openLoadedMr();
+    await click(checkboxes()[0]);
+    notesResponse = () => [SHARED_NOTE];
+    await click(findButton('發布已選 1 則'));
+    await waitFor(() => !!document.querySelector('[role="alertdialog"]'), '重複發布警告');
+    expect(gitlabFetch.writes).toEqual([]);
+  });
+});
+
+describe('錯誤面板寫出失敗的動作（#78）', () => {
+  const RESEND = '會以目前內容重新送出';
+  const expectAction = async (action: string) => {
+    await expectAborted();
+    expect(notesError()!.textContent).toContain(`${action}：已中止發布`);
+    expect(notesError()!.textContent).toContain(RESEND);
+  };
+
+  it('發布已選意見', async () => {
+    await openLoadedMr();
+    await selectTwo();
+    notesResponse = () => 500;
+    await click(findButton('發布已選 2 則'));
+    await expectAction('發布已選意見');
+  });
+
+  it('發布單則意見', async () => {
+    await openLoadedMr();
+    notesResponse = () => 500;
+    await click(singleButtons()[0]);
+    await expectAction('發布單則意見');
+  });
+
+  it('發布摘要', async () => {
+    await openLoadedMr();
+    notesResponse = () => 500;
+    await click(findButton('發布至 MR ▾'));
+    await click(findButton('發布摘要至 MR'));
+    await click(findButton(/^確認發送/, dialog()!));
+    await expectAction('發布摘要');
+  });
+
+  it('共享分析', async () => {
+    await openLoadedMr();
+    notesResponse = () => 500;
+    await click(findButton('發布至 MR ▾'));
+    await click(findButton('共享分析（免 Key 共享）'));
+    await expectAction('共享分析');
+  });
+
+  it('重試失敗意見：寫入失敗後按「重試失敗 1 則」讀留言又失敗', async () => {
+    await openLoadedMr();
+    await clearRemoteNotes();
+    // 測試的 fetch 對所有寫入都回 500：發布會失敗，出現「重試失敗 1 則」
+    await click(singleButtons()[0]);
+    await waitFor(() => !!dialog(), '發布確認視窗');
+    await click(findButton(/^確認發送/, dialog()!));
+    await waitFor(() => !dialog() && text().includes('重試失敗 1 則'), '發布失敗');
+    const writesBefore = gitlabFetch.writes.length;
+
+    notesResponse = () => 500;
+    await click(findButton('重試失敗 1 則'));
+    await waitFor(() => !!notesError(), '讀取失敗錯誤');
+    expect(notesError()!.textContent).toContain('重試失敗意見：已中止發布');
+    expect(notesError()!.textContent).toContain(RESEND);
+    expect(gitlabFetch.writes).toHaveLength(writesBefore);
+  });
+
+  it('重試時已經沒有勾選的意見：提示先勾選再發布', async () => {
+    await openLoadedMr();
+    await selectTwo();
+    notesResponse = () => 500;
+    await click(findButton('發布已選 2 則'));
+    await expectAborted();
+    await click(checkboxes()[0]);
+    await click(checkboxes()[1]);
+    await click(retryButton());
+    expect(text()).toContain('目前沒有勾選要發布的意見，請先勾選再發布。');
+  });
+});
+
+describe('單則發布中：spinner 在點的那顆單則按鈕上（#78）', () => {
+  it('從點擊、讀留言延遲到確認視窗都在該則按鈕上；其他單則按鈕沒有，「發布已選」停用且不顯示讀取中；取消後消失', async () => {
+    await openLoadedMr();
+    await clearRemoteNotes();
+    await selectTwo();
+    let release!: (notes: unknown[]) => void;
+    notesResponse = () => new Promise((r) => (release = r));
+    await click(singleButtons()[2]);
+    await waitFor(() => !!singleButtons()[2].querySelector('.animate-spin'), '單則按鈕 spinner');
+
+    const spinning = singleButtons().filter((b) => b.querySelector('.animate-spin'));
+    expect(spinning).toEqual([singleButtons()[2]]);
+    expect(singleButtons()[2].getAttribute('aria-busy')).toBe('true');
+    expect(singleButtons().every((b) => b.disabled)).toBe(true);
+    const bar = document.querySelector('[aria-label="發布列"]')!;
+    expect(bar.textContent).not.toContain('讀取留言中…');
+    expect(bar.querySelector('.animate-spin')).toBeNull();
+    expect(findButton('發布已選 2 則', bar).disabled).toBe(true);
+    expect(liveStatus()).toContain('正在讀取 MR 留言');
+
+    await act(async () => release([]));
+    await waitFor(() => !!dialog(), '發布確認視窗');
+    expect(singleButtons()[2].querySelector('.animate-spin')).not.toBeNull();
+    expect(singleButtons().filter((b) => b.querySelector('.animate-spin'))).toHaveLength(1);
+
+    await click(findButton('取消', dialog()!));
+    await waitFor(() => !dialog(), '關閉確認視窗');
+    expect(singleButtons().some((b) => b.querySelector('.animate-spin'))).toBe(false);
+    expect(findButton('發布已選 2 則').disabled).toBe(false);
+  });
+});
+
+describe('讀取中與發布中的 aria-live 狀態（#78）', () => {
+  it('一直有 aria-live="polite" 的狀態元素；讀留言中有文字，結束後清空', async () => {
+    await openLoadedMr();
+    expect(document.querySelectorAll('[aria-live="polite"]').length).toBeGreaterThan(0);
+    expect(liveStatus().replace(/\|/g, '')).toBe('');
+    await selectTwo();
+    let fail!: () => void;
+    notesResponse = () => new Promise((resolve) => (fail = () => resolve(500)));
+    await click(findButton('發布已選 2 則'));
+    await waitFor(() => liveStatus().includes('正在讀取 MR 留言，尚未送出任何留言'), 'aria-live 讀取中');
+    await act(async () => fail());
+    await expectAborted();
+    expect(liveStatus().replace(/\|/g, '')).toBe('');
+  });
+
+  it('發布摘要確認視窗：讀留言中確認視窗內也有 aria-live 狀態', async () => {
+    await openLoadedMr();
+    let release!: (notes: unknown[]) => void;
+    notesResponse = () => new Promise((r) => (release = r));
+    await click(findButton('發布至 MR ▾'));
+    await click(findButton('發布摘要至 MR'));
+    await click(findButton(/^確認發送/, dialog()!));
+    await waitFor(
+      () => (dialog()?.querySelector('[aria-live="polite"]')?.textContent ?? '').includes('正在讀取 MR 留言'),
+      '確認視窗 aria-live'
+    );
+    await act(async () => release([SHARED_NOTE]));
+    await waitFor(() => text().includes('分享報告已包含摘要'), '讀完留言');
   });
 });

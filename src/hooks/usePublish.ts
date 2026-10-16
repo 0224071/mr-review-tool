@@ -54,8 +54,17 @@ export type NotesReadRetry =
 /** 意見發布的入口：「發布已選」或「重試失敗 N 則」 */
 export type BatchPublishSource = 'selected' | 'failed';
 
-/** 正在讀 MR 留言的發布路徑：意見（單則／發布已選／重試失敗）、整體摘要、共享報告 */
-export type NotesReadingPath = 'reviews' | 'summary' | 'share';
+/** 正在讀 MR 留言的發布路徑（共享報告看 shareStage）：發布已選、重試失敗、單則、整體摘要 */
+export type NotesReadingPath = Exclude<NotesReadRetry['kind'], 'share'>;
+
+/** 錯誤面板上顯示的失敗動作名稱 */
+export const NOTES_READ_ACTION_LABEL: Record<NotesReadRetry['kind'], string> = {
+  share: '共享分析',
+  summary: '發布摘要',
+  selected: '發布已選意見',
+  single: '發布單則意見',
+  failed: '重試失敗意見',
+};
 
 interface NotesReadFailure {
   message: string;
@@ -147,8 +156,10 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
   const [shareConfirm, setShareConfirm] = useState<ShareConfirmState | null>(null);
   /** 發布前讀取 MR 留言失敗（已中止，沒有送出任何留言） */
   const [notesReadFailure, setNotesReadFailure] = useState<NotesReadFailure | null>(null);
-  /** 意見或整體摘要發布前正在讀 MR 留言（共享報告看 shareStage）；按鈕顯示「讀取留言中…」 */
-  const [notesReading, setNotesReading] = useState<Exclude<NotesReadingPath, 'share'> | null>(null);
+  /** 意見或整體摘要發布前正在讀 MR 留言的路徑（共享報告看 shareStage）；觸發的按鈕顯示讀取中 */
+  const [notesReading, setNotesReading] = useState<NotesReadingPath | null>(null);
+  /** 最近一次意見發布作業是哪一則單則發布（不是單則時為 null）；作業結束後由 singlePublishingIndex 判斷不再顯示 */
+  const [singlePublishIndex, setSinglePublishIndex] = useState<number | null>(null);
   /**
    * 發布作業（從讀留言開始到寫入結束）進行中的同步鎖：state 要等重新 render 才更新，
    * 同一輪連點兩次時靠這個擋下第二次，留言只讀一次。
@@ -165,10 +176,13 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
   const failNotesRead = (err: unknown, retry: NotesReadRetry) =>
     setNotesReadFailure({ message: buildNotesReadErrorMessage(err), retry, mrUrl, result: analysisResult });
   /** 只顯示目前 MR 與結果的讀取失敗 */
-  const notesReadError =
+  const visibleNotesReadFailure =
     notesReadFailure && notesReadFailure.mrUrl === mrUrl && notesReadFailure.result === analysisResult
-      ? notesReadFailure.message
+      ? notesReadFailure
       : null;
+  const notesReadError = visibleNotesReadFailure?.message ?? null;
+  /** 讀取失敗的是哪個動作（錯誤面板顯示「共享分析：已中止發布」等） */
+  const notesReadAction = visibleNotesReadFailure ? NOTES_READ_ACTION_LABEL[visibleNotesReadFailure.retry.kind] : null;
 
   const publishedMatches = useMemo(() => {
     if (!analysisResult) return {};
@@ -227,7 +241,8 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
     // 發布前一定要讀到 MR 現有留言才比對重複；讀不到就中止（不改用先前讀到的留言），從這裡開始算發布中
     publishLockRef.current = true;
     setIsPublishingInProgress(true);
-    setNotesReading('reviews');
+    setNotesReading(retry.kind === 'single' ? 'single' : retry.kind === 'failed' ? 'failed' : 'selected');
+    setSinglePublishIndex(retry.kind === 'single' ? retry.index : null);
     setNotesReadFailure(null);
     let notes: GitLabNote[];
     try {
@@ -289,6 +304,7 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
     }
     if (publishLockRef.current) return;
 
+    setSinglePublishIndex(null);
     setPublishModalConfig({
       isPublishingSummary: true,
       itemsToPublish: [],
@@ -577,13 +593,25 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
               .map(([index]) => Number(index));
     const items = buildPublishItems(indices);
     if (items.length === 0) {
-      setInfoMessage(retry.kind === 'selected' ? '目前沒有勾選要發布的意見。' : '目前沒有要重試的意見。');
+      setInfoMessage(
+        retry.kind === 'failed' ? '目前沒有要重試的意見。' : '目前沒有勾選要發布的意見，請先勾選再發布。'
+      );
       return;
     }
     void requestPublishReviews(items, retry);
   };
 
   const dismissNotesReadError = () => setNotesReadFailure(null);
+
+  /**
+   * 正在進行的單則發布是哪一則：從點擊開始，經過讀留言、重複警告／發布確認、寫入，直到作業結束
+   * （讀取失敗、取消或發布完成）；該則的單則按鈕顯示 spinner。
+   */
+  const singlePublishingIndex =
+    singlePublishIndex !== null &&
+    (notesReading === 'single' || !!duplicateWarning || isPublishModalOpen || isPublishingInProgress)
+      ? singlePublishIndex
+      : null;
 
   return {
     mrUrl,
@@ -597,7 +625,9 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
     isPublishBusy,
     shareStage,
     notesReading,
+    singlePublishingIndex,
     notesReadError,
+    notesReadAction,
     retryNotesRead,
     dismissNotesReadError,
     shareConfirm,

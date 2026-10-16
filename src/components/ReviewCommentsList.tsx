@@ -66,6 +66,8 @@ interface ReviewCommentsListProps {
   publishStates?: Record<number, ReviewPublishState>;
   /** 有發布作業進行中（含發布前讀留言）時停用勾選、發布／重試按鈕 */
   isPublishing?: boolean;
+  /** 正在進行單則發布的意見位置（從點擊到作業結束）：該則的單則按鈕顯示 spinner */
+  singlePublishingIndex?: number | null;
   /** 依本地紀錄與 MR 現有留言判斷的已發布意見 */
   publishedMatches?: Record<number, PublishedMatch>;
   isGitLabConfigured?: boolean;
@@ -139,6 +141,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
   onPublishSingle,
   publishStates = {},
   isPublishing = false,
+  singlePublishingIndex = null,
   publishedMatches = {},
   selectedIndices: controlledSelectedIndices,
   onSelectIndicesChange,
@@ -437,6 +440,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
             const lineText = displayLineText(review);
             const commentLabelId = `${labelIdPrefix}-comment-${originalIndex}`;
             const publishedLabelId = `${labelIdPrefix}-published-${originalIndex}`;
+            const duplicateLabelId = `${labelIdPrefix}-duplicate-${originalIndex}`;
             const suggestionLabelId = `${labelIdPrefix}-suggestion-${originalIndex}`;
             const emptyReason = commentEmpty ? EMPTY_COMMENT_REASON : null;
             const showReason = (message: string) => showDisabledHint(originalIndex, message);
@@ -446,6 +450,9 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
             const isPublished = pubState?.status === 'published' || !!publishedMatch;
             const isSending = pubState?.status === 'sending';
             const isError = pubState?.status === 'error';
+            // 已發布的意見仍可勾選以重新發布；勾選時在卡片上提示會重複
+            const willRepublish = isPublished && isSelected;
+            const isSinglePublishing = singlePublishingIndex === originalIndex;
 
             return (
               <div
@@ -453,7 +460,7 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                 tabIndex={0}
                 className={`group p-3.5 transition-colors space-y-2 text-xs focus:outline-none focus-within:bg-slate-50/80 ${
                   isSelected ? 'bg-primary-subtle/25' : 'hover:bg-surface-subtle'
-                } ${isPublished ? 'opacity-85' : ''}`}
+                }`}
               >
                 {/* Header Row: Checkbox, Severity, File:Line；右側為操作按鈕 */}
                 <div className="flex items-start justify-between gap-2">
@@ -470,7 +477,9 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                         } ${dimmed ? '' : 'disabled:opacity-40'}`}
                         title={commentEmpty ? EMPTY_COMMENT_MESSAGE : isPublished ? '已發布過，勾選將重複發布' : '勾選此意見'}
                         aria-label={`勾選此意見：${review.file}${lineText}`}
-                        aria-describedby={isPublished ? publishedLabelId : undefined}
+                        aria-describedby={
+                          isPublished ? (willRepublish ? `${publishedLabelId} ${duplicateLabelId}` : publishedLabelId) : undefined
+                        }
                         aria-pressed={isSelected}
                       >
                         {isSelected ? (
@@ -494,6 +503,11 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                       >
                         <CheckCircle2 className="w-3 h-3 text-success" />
                         已發布
+                      </span>
+                    )}
+                    {willRepublish && (
+                      <span id={duplicateLabelId} className="shrink-0 mt-0.5 text-[10px] font-semibold text-amber-700">
+                        將重複發布
                       </span>
                     )}
 
@@ -534,7 +548,12 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                   </div>
 
                   {/* Actions Toolbar: Only visible on hover or focus */}
-                  <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                  {/* 單則發布進行中時一直顯示，看得到該則按鈕上的 spinner */}
+                  <div
+                    className={`flex items-center gap-1 shrink-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity ${
+                      isSinglePublishing ? 'opacity-100' : 'opacity-0'
+                    }`}
+                  >
                     {/* Writing guideline warning */}
                     {violations.length > 0 && (
                       <div className="relative group/tip inline-flex items-center gap-0.5 text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 text-[10px] cursor-help">
@@ -615,11 +634,27 @@ export const ReviewCommentsList: React.FC<ReviewCommentsListProps> = ({
                             )
                           }
                           disabled={isSending || isPublishing || commentEmpty}
-                          className="p-1 rounded text-gitlab hover:text-gitlab-hover hover:bg-gitlab-subtle transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                          title={isPublished ? '已發布過，再次發布會重複' : '發布此則至 GitLab'}
+                          className={`p-1 rounded text-gitlab hover:text-gitlab-hover hover:bg-gitlab-subtle transition-colors disabled:pointer-events-none ${
+                            isSinglePublishing ? '' : 'disabled:opacity-40'
+                          }`}
+                          title={
+                            isSinglePublishing
+                              ? '此則發布中…'
+                              : isPublished
+                                ? '已發布過，再次發布會重複'
+                                : '發布此則至 GitLab'
+                          }
                           aria-label="發布單則"
+                          aria-busy={isSinglePublishing || undefined}
                         >
-                          <Send className="w-3.5 h-3.5" />
+                          {isSinglePublishing ? (
+                            <span
+                              aria-hidden="true"
+                              className="block w-3.5 h-3.5 border-2 border-gitlab/30 border-t-gitlab rounded-full animate-spin"
+                            />
+                          ) : (
+                            <Send className="w-3.5 h-3.5" />
+                          )}
                         </button>
                       </TapForReason>
                     )}

@@ -226,8 +226,12 @@ export default function App({ services }: { services: AppServices }) {
                 onShareAnalysisToMr={publish.handleShareAnalysisToMr}
                 isSharingToMr={publish.isSharingToMr}
                 isReadingShareNotes={publish.shareStage === 'reading'}
-                isReadingPublishNotes={publish.notesReading === 'reviews'}
+                isReadingPublishNotes={publish.notesReading === 'selected'}
+                isReadingRetryFailedNotes={publish.notesReading === 'failed'}
+                isReadingSingleNotes={publish.notesReading === 'single'}
+                singlePublishingIndex={publish.singlePublishingIndex}
                 notesReadError={publish.notesReadError}
+                notesReadAction={publish.notesReadAction}
                 onRetryNotesRead={publish.retryNotesRead}
                 onDismissNotesReadError={publish.dismissNotesReadError}
                 isSummaryPublished={analysis.isSummaryPublished}

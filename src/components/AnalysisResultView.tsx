@@ -72,10 +72,18 @@ interface AnalysisResultViewProps {
   isSharingToMr?: boolean;
   /** 共享分析前正在用 GET 讀取 MR 留言（尚未寫入）：發布按鈕顯示「讀取留言中」 */
   isReadingShareNotes?: boolean;
-  /** 發布意見前正在讀取 MR 留言：「發布已選」顯示「讀取留言中…」 */
+  /** 「發布已選」前正在讀取 MR 留言：「發布已選」顯示「讀取留言中…」 */
   isReadingPublishNotes?: boolean;
+  /** 「重試失敗 N 則」前正在讀取 MR 留言：該按鈕顯示「讀取留言中…」 */
+  isReadingRetryFailedNotes?: boolean;
+  /** 單則發布前正在讀取 MR 留言（「發布已選」不顯示讀取中，spinner 在該則的單則按鈕上） */
+  isReadingSingleNotes?: boolean;
+  /** 正在進行單則發布的意見位置：該則的單則按鈕顯示 spinner */
+  singlePublishingIndex?: number | null;
   /** 發布前讀取 MR 留言失敗的原因（已中止、沒有送出任何留言）；顯示在發布列上方並提供重試 */
   notesReadError?: string | null;
+  /** 讀取失敗的動作名稱（例如「共享分析」），顯示成「共享分析：已中止發布」 */
+  notesReadAction?: string | null;
   onRetryNotesRead?: () => void;
   onDismissNotesReadError?: () => void;
   isSummaryPublished?: boolean;
@@ -115,7 +123,11 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   isSharingToMr = false,
   isReadingShareNotes = false,
   isReadingPublishNotes = false,
+  isReadingRetryFailedNotes = false,
+  isReadingSingleNotes = false,
+  singlePublishingIndex = null,
   notesReadError = null,
+  notesReadAction = null,
   onRetryNotesRead,
   onDismissNotesReadError,
   isSummaryPublished = false,
@@ -338,6 +350,11 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
     if (typeof window === 'undefined') return false;
     return new URLSearchParams(window.location.search).has('debug');
   }, []);
+
+  /** 讀取留言中／發布中的狀態，給螢幕報讀器（aria-live）；按鈕上的文字與 spinner 是給看得到的人 */
+  const isReadingAnyNotes =
+    isReadingShareNotes || isReadingPublishNotes || isReadingRetryFailedNotes || isReadingSingleNotes;
+  const publishStatusText = isReadingAnyNotes ? '正在讀取 MR 留言，尚未送出任何留言…' : isPublishing ? '發布中…' : '';
 
   return (
     <div className="space-y-4 pb-6">
@@ -586,6 +603,7 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
             onPublishSingle={onPublishSingleReview}
             publishStates={publishStates}
             isPublishing={isPublishing}
+            singlePublishingIndex={singlePublishingIndex}
             publishedMatches={publishedMatches}
             isGitLabConfigured={isGitLabConfigured}
             selectedIndices={selectedIndices}
@@ -794,8 +812,11 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
               <div className="flex items-start gap-2 min-w-0">
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                 <div className="min-w-0">
-                  <p className="font-semibold text-rose-900">已中止發布</p>
+                  <p className="font-semibold text-rose-900">
+                    {notesReadAction ? `${notesReadAction}：已中止發布` : '已中止發布'}
+                  </p>
                   <p className="mt-0.5 break-all">{notesReadError}</p>
+                  <p className="mt-0.5">按「重試」會以目前內容重新送出（先重新讀取留言，仍會檢查並請你確認）。</p>
                   {onRetryNotesRead && (
                     <button
                       type="button"
@@ -890,8 +911,17 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                   disabled={isPublishing}
                   className="px-2.5 py-2 text-xs font-semibold text-danger-subtle bg-danger hover:bg-danger-hover rounded-lg disabled:opacity-40 transition-colors flex items-center gap-1.5"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>重試失敗 {failedIndices.length} 則</span>
+                  {isReadingRetryFailedNotes ? (
+                    <>
+                      <Spinner className="border-danger-subtle/40 border-t-danger-subtle" />
+                      <span>讀取留言中…</span>
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>重試失敗 {failedIndices.length} 則</span>
+                    </>
+                  )}
                 </button>
               )}
 
@@ -923,6 +953,11 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* 讀取留言中／發布中的狀態（螢幕報讀器）；一直渲染，內容變動時才會被讀出 */}
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {publishStatusText}
+      </p>
     </div>
   );
 };

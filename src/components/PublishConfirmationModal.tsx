@@ -301,6 +301,10 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
 
         {/* Footer */}
         <div className="px-4 sm:px-6 py-3.5 bg-surface-subtle border-t border-surface-border flex flex-wrap items-center justify-end gap-2.5">
+          {/* 讀取留言中／發布中的狀態（螢幕報讀器）；確認視窗開著時背景頁面的狀態可能讀不到 */}
+          <p className="sr-only" aria-live="polite" aria-atomic="true">
+            {isPublishing ? (isReadingNotes ? '正在讀取 MR 留言，尚未送出任何留言…' : share ? '共享中…' : '發布中…') : ''}
+          </p>
           <button
             type="button"
             onClick={onClose}
