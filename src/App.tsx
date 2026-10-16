@@ -220,12 +220,20 @@ export default function App({ services }: { services: AppServices }) {
                 onPublishSingleReview={publish.handlePublishSingleReview}
                 onPublishBatchReviews={publish.handlePublishBatchReviews}
                 publishStates={analysis.publishStates}
-                isPublishing={publish.isPublishingInProgress}
+                isPublishing={publish.isPublishBusy}
                 isGitLabConfigured={gitlab.isConfigured(settingsState.settings)}
                 onPublishSummaryToMr={publish.handlePublishSummaryToMr}
                 onShareAnalysisToMr={publish.handleShareAnalysisToMr}
                 isSharingToMr={publish.isSharingToMr}
                 isReadingShareNotes={publish.shareStage === 'reading'}
+                isReadingPublishNotes={publish.notesReading === 'selected'}
+                isReadingRetryFailedNotes={publish.notesReading === 'failed'}
+                isReadingSingleNotes={publish.notesReading === 'single'}
+                singlePublishingIndex={publish.singlePublishingIndex}
+                notesReadError={publish.notesReadError}
+                notesReadAction={publish.notesReadAction}
+                onRetryNotesRead={publish.retryNotesRead}
+                onDismissNotesReadError={publish.dismissNotesReadError}
                 isSummaryPublished={analysis.isSummaryPublished}
                 isSharedToMrPublished={analysis.isSharedToMrPublished}
                 mrUrl={publish.mrUrl}
@@ -306,6 +314,7 @@ export default function App({ services }: { services: AppServices }) {
         targetLabel={gitlab.targetLabel}
         notice={gitlab.notice}
         isPublishing={publish.isPublishingInProgress}
+        isReadingNotes={publish.notesReading === 'summary'}
       />
 
       {/* 5b. 共享分析確認：說明會新增或覆寫哪一則留言，按確認才寫入 GitLab */}

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { describe, expect, it, vi } from 'vitest';
-import { actAsync, createMemoryStore, flush, makeRecord, renderHook } from './test-utils';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { actAsync, createMemoryStore, flush, makeRecord, renderHook, stubGitLabFetch } from './test-utils';
+import { liveGitLabGateway } from '../app/live-services';
 import { useHistory, UseHistoryOptions } from './useHistory';
 import { DEFAULT_SETTINGS } from '../types/settings';
 import type { HistoryRecord, HistoryStore } from '../core/history-store';
@@ -28,6 +29,10 @@ function setup(store: HistoryStore | null, over: Partial<UseHistoryOptions> = {}
   const hook = renderHook((o: UseHistoryOptions) => useHistory(o), options);
   return { ...hook, options, gitlab };
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('useHistory', () => {
   it('無法開啟歷史紀錄時 historyAvailable 為 false', async () => {
@@ -157,6 +162,60 @@ describe('useHistory', () => {
     });
     expect(options.onRemoteNotes).not.toHaveBeenCalled();
     expect(store.update).not.toHaveBeenCalled();
+  });
+
+  describe('開啟 MR 紀錄時讀不到留言（#78）', () => {
+    it('不呼叫 onRemoteNotes（保留既有留言），MR 資訊成功仍更新 latestHeadSha', async () => {
+      const record = makeRecord({ id: 'mr', sourceType: 'gitlab', mrUrl: MR_URL, latestHeadSha: 'old-head' });
+      const { store } = createMemoryStore([record]);
+      const { result, options, gitlab } = setup(store);
+      await flush();
+      gitlab.fetchNotes.mockRejectedValueOnce(new Error('讀取 MR 留言失敗 (第 1 頁，500)'));
+
+      // 實際使用時 GitLab 回應前畫面已切到這筆紀錄（見上方「開啟 MR 紀錄」）
+      await actAsync(() => result.current.setCurrentRecordId('mr'));
+      await actAsync(() => result.current.handleOpenRecord('mr'));
+      expect(options.onOpenRecord).toHaveBeenCalledWith(record);
+      expect(options.onRemoteNotes).not.toHaveBeenCalled();
+      expect(store.update).toHaveBeenCalledWith('mr', { latestHeadSha: 'new-head' });
+      expect(result.current.currentRecord?.latestHeadSha).toBe('new-head');
+    });
+
+    it('MR 資訊失敗、留言成功時仍套用留言，不更新 latestHeadSha', async () => {
+      const record = makeRecord({ id: 'mr', sourceType: 'gitlab', mrUrl: MR_URL, latestHeadSha: 'old-head' });
+      const { store } = createMemoryStore([record]);
+      const { result, options, gitlab } = setup(store);
+      await flush();
+      gitlab.fetchMergeRequest.mockRejectedValueOnce(new Error('401'));
+
+      // 實際使用時 GitLab 回應前畫面已切到這筆紀錄（見上方「開啟 MR 紀錄」）
+      await actAsync(() => result.current.setCurrentRecordId('mr'));
+      await actAsync(() => result.current.handleOpenRecord('mr'));
+      expect(options.onRemoteNotes).toHaveBeenCalledWith([NOTE]);
+      expect(store.update).not.toHaveBeenCalled();
+    });
+
+    it('正式版 gateway：留言 GET 回 500 時不崩潰、只送 GET，不送出任何寫入', async () => {
+      const record = makeRecord({ id: 'mr', sourceType: 'gitlab', mrUrl: MR_URL, latestHeadSha: 'old-head' });
+      const { store } = createMemoryStore([record]);
+      const { writes } = stubGitLabFetch({
+        mr: { web_url: MR_URL, diff_refs: { base_sha: 'b', start_sha: 's', head_sha: 'new-head' } },
+        rawDiff: '',
+        notes: () => 500,
+      });
+      const { result, options } = setup(store, {
+        gitlab: liveGitLabGateway,
+        settings: { ...DEFAULT_SETTINGS, gitlabToken: 'FAKE-token' },
+      });
+      await flush();
+
+      // 實際使用時 GitLab 回應前畫面已切到這筆紀錄（見上方「開啟 MR 紀錄」）
+      await actAsync(() => result.current.setCurrentRecordId('mr'));
+      await actAsync(() => result.current.handleOpenRecord('mr'));
+      expect(options.onRemoteNotes).not.toHaveBeenCalled();
+      expect(writes).toEqual([]);
+      expect(result.current.currentRecord?.latestHeadSha).toBe('new-head');
+    });
   });
 
   it('開啟不存在的紀錄：只重新整理清單', async () => {

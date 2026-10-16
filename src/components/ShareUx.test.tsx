@@ -135,7 +135,8 @@ describe('共享前讀取留言中', () => {
 
   it('GET 讀留言期間發布按鈕顯示「讀取留言中」，不是「共享中」', () => {
     const html = renderView(true);
-    expect(html).toContain('讀取留言中...');
+    expect(html).toContain('讀取留言中…');
+    expect(html).toContain('animate-spin');
     expect(html).not.toContain('共享中');
   });
 

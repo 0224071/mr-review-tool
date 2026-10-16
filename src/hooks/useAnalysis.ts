@@ -457,15 +457,18 @@ export function useAnalysis({ services, settings: settingsState, history }: UseA
 
       // 3. Check for previously shared analysis in notes（同時保留留言供重複發布比對）
       let notes: GitLabNote[] = [];
+      let notesLoaded = false;
       let shared: SharedAnalysis | null = null;
       try {
         notes = await gitlab.fetchNotes(target);
+        notesLoaded = true;
         shared = findSharedAnalysisInNotes(notes);
       } catch {
-        // notes checking failure does not block diff fetching
+        // TODO(#79): 讀不到留言時要提示使用者（目前不顯示錯誤）。
+        // 讀不到留言不影響抓 diff；保留既有的留言，不清成 []（發布前會重新讀，讀不到就中止）
       }
       if (isStale()) return;
-      setRemoteNotes(notes);
+      if (notesLoaded) setRemoteNotes(notes);
 
       // 共享報告的分析版本與 MR 目前 head sha 不同（或舊版標記沒記錄）時不載入，只顯示提示卡片
       const latestHead = mrInfo.diff_refs?.head_sha ?? null;

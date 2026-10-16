@@ -2,11 +2,11 @@
  * 發布到 GitLab：重複發布比對與警告、發布確認視窗、逐則／整體摘要發布，以及分享分析報告。
  * 發布結果寫回 useAnalysis 持有的發布狀態與已發布紀錄（隨結果保存到歷史紀錄）。
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { DraftEdits } from '../core/history-store';
 import { createPublishedRecord, findPublishedMatches, partitionDuplicates } from '../core/publish-dedup';
-import { MRReviewItem } from '../types/review';
-import type { GitLabAuthor } from '../types/gitlab';
+import { MRAnalysisResult, MRReviewItem } from '../types/review';
+import type { GitLabAuthor, GitLabNote } from '../types/gitlab';
 import { findExistingOverallNote, SUMMARY_TAG } from '../services/gitlab-api';
 import { PublishTarget } from '../services/review-publisher';
 import { filterPublishableItems, resolveEffectiveComment, resolveEffectiveSuggestion } from '../core/review-text';
@@ -39,6 +39,47 @@ export interface ShareConfirmState {
 /** 共享分析的進度：讀取 MR 留言（GET，尚未寫入）或寫入分享留言 */
 export type ShareStage = 'reading' | 'writing';
 
+/**
+ * 發布前讀取 MR 留言失敗的是哪條發布路徑；按「重試」時依此從頭再跑一次。
+ * 只記路徑，不記當時要發布的內容：重試時依「目前」的勾選、草稿與失敗項目重新組出要發布的意見。
+ */
+export type NotesReadRetry =
+  | { kind: 'selected' }
+  | { kind: 'failed' }
+  /** 單則發布：記哪一則（卡片位置），內文仍取目前草稿 */
+  | { kind: 'single'; index: number }
+  | { kind: 'summary' }
+  | { kind: 'share' };
+
+/** 意見發布的入口：「發布已選」或「重試失敗 N 則」 */
+export type BatchPublishSource = 'selected' | 'failed';
+
+/** 正在讀 MR 留言的發布路徑（共享報告看 shareStage）：發布已選、重試失敗、單則、整體摘要 */
+export type NotesReadingPath = Exclude<NotesReadRetry['kind'], 'share'>;
+
+/** 錯誤面板上顯示的失敗動作名稱 */
+export const NOTES_READ_ACTION_LABEL: Record<NotesReadRetry['kind'], string> = {
+  share: '共享分析',
+  summary: '發布摘要',
+  selected: '發布已選意見',
+  single: '發布單則意見',
+  failed: '重試失敗意見',
+};
+
+interface NotesReadFailure {
+  message: string;
+  retry: NotesReadRetry;
+  /** 失敗當時的 MR 與分析結果；切到別的 MR 或結果後不再顯示（重試對象已不同） */
+  mrUrl: string;
+  result: MRAnalysisResult | null;
+}
+
+/** 發布前讀不到 MR 留言時的錯誤訊息：沒有送出任何留言，只能重試（不提供略過重複檢查） */
+export function buildNotesReadErrorMessage(err: unknown): string {
+  const detail = err instanceof Error && err.message ? err.message : '讀取 MR 留言失敗';
+  return `沒有送出任何留言：發布前讀取 MR 現有留言失敗（${detail}），無法確認是否會重複發布。請按「重試」重新讀取留言。`;
+}
+
 /** MR 上某則留言的網址：MR 網址（去掉既有的 #）+ #note_<id> */
 export function buildNoteUrl(mrWebUrl: string, noteId: number): string {
   return `${mrWebUrl.split('#')[0]}#note_${noteId}`;
@@ -56,6 +97,8 @@ export interface UsePublishOptions {
     | 'remoteNotes'
     | 'setRemoteNotes'
     | 'draftEdits'
+    | 'selectedIndices'
+    | 'publishStates'
     | 'publishedRecords'
     | 'setPublishedRecords'
     | 'setSelectedIndices'
@@ -77,6 +120,8 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
     remoteNotes,
     setRemoteNotes,
     draftEdits,
+    selectedIndices,
+    publishStates,
     publishedRecords,
     setPublishedRecords,
     setSelectedIndices,
@@ -109,11 +154,35 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
   const [duplicateWarning, setDuplicateWarning] = useState<{ fresh: PublishItem[]; duplicates: PublishItem[] } | null>(null);
   /** 共享分析的確認視窗：開啟時已讀好留言並決定新增或覆寫哪一則；按確認前不送出任何寫入請求 */
   const [shareConfirm, setShareConfirm] = useState<ShareConfirmState | null>(null);
+  /** 發布前讀取 MR 留言失敗（已中止，沒有送出任何留言） */
+  const [notesReadFailure, setNotesReadFailure] = useState<NotesReadFailure | null>(null);
+  /** 意見或整體摘要發布前正在讀 MR 留言的路徑（共享報告看 shareStage）；觸發的按鈕顯示讀取中 */
+  const [notesReading, setNotesReading] = useState<NotesReadingPath | null>(null);
+  /** 最近一次意見發布作業是哪一則單則發布（不是單則時為 null）；作業結束後由 singlePublishingIndex 判斷不再顯示 */
+  const [singlePublishIndex, setSinglePublishIndex] = useState<number | null>(null);
+  /**
+   * 發布作業（從讀留言開始到寫入結束）進行中的同步鎖：state 要等重新 render 才更新，
+   * 同一輪連點兩次時靠這個擋下第二次，留言只讀一次。
+   */
+  const publishLockRef = useRef(false);
+  /** 任何發布作業進行中（讀留言或寫入）：所有發布相關按鈕停用 */
+  const isPublishBusy = isPublishingInProgress || isSharingToMr;
 
   // 發布時使用的 diff_refs：結果產生時的版本 → 目前 MR → 服務提供的備用版本（示範模式）
   const publishDiffRefs = resultDiffRefs ?? currentGitLabMr?.diff_refs ?? gitlab.fallbackDiffRefs;
   /** 發布目標 MR 網址：目前 MR 優先，否則用輸入框的網址 */
   const mrUrl = currentGitLabMr?.web_url || gitlabMrUrl;
+
+  const failNotesRead = (err: unknown, retry: NotesReadRetry) =>
+    setNotesReadFailure({ message: buildNotesReadErrorMessage(err), retry, mrUrl, result: analysisResult });
+  /** 只顯示目前 MR 與結果的讀取失敗 */
+  const visibleNotesReadFailure =
+    notesReadFailure && notesReadFailure.mrUrl === mrUrl && notesReadFailure.result === analysisResult
+      ? notesReadFailure
+      : null;
+  const notesReadError = visibleNotesReadFailure?.message ?? null;
+  /** 讀取失敗的是哪個動作（錯誤面板顯示「共享分析：已中止發布」等） */
+  const notesReadAction = visibleNotesReadFailure ? NOTES_READ_ACTION_LABEL[visibleNotesReadFailure.retry.kind] : null;
 
   const publishedMatches = useMemo(() => {
     if (!analysisResult) return {};
@@ -122,6 +191,20 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
 
   /** 要發布的意見內文：草稿優先，清空也不退回 AI 原值 */
   const publishCommentFor = (item: PublishItem) => resolveEffectiveComment(item.customComment, item.review.comment);
+
+  /** 依目前的草稿組出要發布的意見（不在結果中的位置略過） */
+  const buildPublishItems = (indices: Iterable<number>): PublishItem[] =>
+    analysisResult
+      ? Array.from(indices)
+          .filter((index) => analysisResult.reviews[index])
+          .sort((a, b) => a - b)
+          .map((index) => ({
+            review: analysisResult.reviews[index],
+            customComment: draftEdits[index]?.comment,
+            customSuggestion: draftEdits[index]?.suggestion,
+            index,
+          }))
+      : [];
 
   const openPublishModal = (items: PublishItem[]) => {
     setPublishModalConfig({
@@ -134,12 +217,12 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
   /**
    * 發布前比對本地發布紀錄＋MR 現有留言；有重複時先跳橘色警告，按「仍要發布」才進原本的發布確認。
    */
-  const requestPublishReviews = async (requested: PublishItem[]) => {
+  const requestPublishReviews = async (requested: PublishItem[], retry: NotesReadRetry) => {
     if (!gitlab.isConfigured(settings)) {
       setIsSettingsOpen(true);
       return;
     }
-    if (!analysisResult || requested.length === 0 || isPublishingInProgress) return;
+    if (!analysisResult || requested.length === 0 || publishLockRef.current) return;
     // 內文是空的意見不發布（「發布已選」、單則發布與重試共用此入口）
     const items = filterPublishableItems(requested);
     if (items.length < requested.length) {
@@ -147,16 +230,32 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
     }
     if (items.length === 0) return;
 
-    let notes = remoteNotes;
+    let target: PublishTarget;
     try {
-      const fresh = await gitlab.fetchNotes(gitlab.resolveTarget(mrUrl, settings));
-      if (fresh.length > 0) {
-        notes = fresh;
-        setRemoteNotes(fresh);
-      }
-    } catch {
-      // 沒有目標 MR 或讀不到留言時，只用本地紀錄與先前讀到的留言比對
+      target = gitlab.resolveTarget(mrUrl, settings);
+    } catch (e: unknown) {
+      setErrorMessage(e instanceof Error ? e.message : '無效的 GitLab MR 網址');
+      return;
     }
+
+    // 發布前一定要讀到 MR 現有留言才比對重複；讀不到就中止（不改用先前讀到的留言），從這裡開始算發布中
+    publishLockRef.current = true;
+    setIsPublishingInProgress(true);
+    setNotesReading(retry.kind === 'single' ? 'single' : retry.kind === 'failed' ? 'failed' : 'selected');
+    setSinglePublishIndex(retry.kind === 'single' ? retry.index : null);
+    setNotesReadFailure(null);
+    let notes: GitLabNote[];
+    try {
+      notes = await gitlab.fetchNotes(target);
+    } catch (err: unknown) {
+      failNotesRead(err, retry);
+      return;
+    } finally {
+      publishLockRef.current = false;
+      setIsPublishingInProgress(false);
+      setNotesReading(null);
+    }
+    setRemoteNotes(notes);
 
     const drafts: DraftEdits = { ...draftEdits };
     items.forEach((item) => {
@@ -184,20 +283,17 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
     index?: number
   ) => {
     // 單則發布與重試入口：有發布作業進行中時忽略
-    if (isPublishingInProgress) return;
-    void requestPublishReviews([
-      {
-        review,
-        customComment,
-        customSuggestion,
-        index: index !== undefined ? index : 0,
-      },
-    ]);
+    if (isPublishBusy || publishLockRef.current) return;
+    const itemIndex = index !== undefined ? index : 0;
+    void requestPublishReviews([{ review, customComment, customSuggestion, index: itemIndex }], {
+      kind: 'single',
+      index: itemIndex,
+    });
   };
 
   // Stage 2: Batch Review Comments Publish Trigger
-  const handlePublishBatchReviews = (items: PublishItem[]) => {
-    void requestPublishReviews(items);
+  const handlePublishBatchReviews = (items: PublishItem[], source: BatchPublishSource = 'selected') => {
+    void requestPublishReviews(items, { kind: source });
   };
 
   // Stage 2: Publish General Summary to MR Note Trigger
@@ -206,7 +302,9 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
       setIsSettingsOpen(true);
       return;
     }
+    if (publishLockRef.current) return;
 
+    setSinglePublishIndex(null);
     setPublishModalConfig({
       isPublishingSummary: true,
       itemsToPublish: [],
@@ -234,6 +332,7 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
 
   // Stage 2: Confirm and Execute Publishing (Discussions API or Notes API)
   const handleConfirmPublish = async () => {
+    if (publishLockRef.current) return;
     let target: PublishTarget;
     try {
       target = gitlab.resolveTarget(mrUrl, settings);
@@ -243,23 +342,32 @@ export function usePublish({ gitlab, settings: settingsState, analysis }: UsePub
       return;
     }
 
+    publishLockRef.current = true;
     setIsPublishingInProgress(true);
+    setNotesReadFailure(null);
 
     try {
       if (publishModalConfig.isPublishingSummary) {
         // Publish General Summary Note
         if (!analysisResult) return;
 
-        // 4. 整體留言去重：送出「整體摘要」前，先讀取 MR notes
-        const notes = await gitlab.fetchNotes(target);
+        // 4. 整體留言去重：送出「整體摘要」前，先讀取 MR notes；讀不到就中止，不送出
+        let notes: GitLabNote[];
+        setNotesReading('summary');
+        try {
+          notes = await gitlab.fetchNotes(target);
+        } catch (err: unknown) {
+          failNotesRead(err, { kind: 'summary' });
+          return;
+        } finally {
+          setNotesReading(null);
+        }
         const { sharedNote, summaryNote } = findExistingOverallNote(notes);
 
         if (sharedNote) {
           // 若已存在分享報告留言（含 GITLAB_MR_REVIEWER_START 標記），就不再另外發整體摘要，改為提示使用者「分享報告已包含摘要」
           setInfoMessage('分享報告已包含摘要，無需重複發布整體留言。');
           setIsSummaryPublished(true);
-          setIsPublishModalOpen(false);
-          setIsPublishingInProgress(false);
           return;
         }
 
@@ -353,6 +461,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
         generalErr instanceof Error ? generalErr.message : '發布至 GitLab 過程中發生錯誤'
       );
     } finally {
+      publishLockRef.current = false;
       setIsPublishingInProgress(false);
       setIsPublishModalOpen(false);
     }
@@ -364,7 +473,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
    * 使用者按確認（handleConfirmShareAnalysis）才寫入 GitLab。
    */
   const handleShareAnalysisToMr = async () => {
-    if (!analysisResult || isSharingToMr) return;
+    if (!analysisResult || isPublishBusy || publishLockRef.current) return;
     let target: PublishTarget;
     try {
       target = gitlab.resolveTarget(mrUrl, settings);
@@ -379,10 +488,19 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
     }
 
     // 這段只用 GET 讀留言，按鈕顯示「讀取留言中」
+    publishLockRef.current = true;
     setShareStage('reading');
+    setNotesReadFailure(null);
     try {
       // 4. 整體留言去重：若使用者先發整體摘要、後發分享報告，分享報告改為更新既有的摘要留言，讓 MR 上只保留一則整體留言
-      const notes = await gitlab.fetchNotes(target);
+      let notes: GitLabNote[];
+      try {
+        notes = await gitlab.fetchNotes(target);
+      } catch (err: unknown) {
+        // 讀不到留言就不知道該新增或覆寫哪一則：中止，不開確認視窗
+        failNotesRead(err, { kind: 'share' });
+        return;
+      }
       const { sharedNote, summaryNote } = findExistingOverallNote(notes);
       const overwriteNote = sharedNote ?? summaryNote;
       setShareConfirm({
@@ -398,13 +516,15 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : '讀取 MR 留言失敗，未共享分析報告');
     } finally {
+      publishLockRef.current = false;
       setShareStage(null);
     }
   };
 
   /** 確認視窗按「確認共享」：寫入（新增或覆寫）分享留言，標記中帶分析當時的 head sha */
   const handleConfirmShareAnalysis = async () => {
-    if (!analysisResult || !shareConfirm || isSharingToMr) return;
+    if (!analysisResult || !shareConfirm || publishLockRef.current) return;
+    publishLockRef.current = true;
     setShareStage('writing');
     try {
       await gitlab.shareAnalysis(
@@ -419,6 +539,7 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : '分享報告至 MR 留言失敗');
     } finally {
+      publishLockRef.current = false;
       setShareStage(null);
       setShareConfirm(null);
     }
@@ -446,6 +567,52 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
 
   const cancelDuplicateWarning = () => setDuplicateWarning(null);
 
+  /**
+   * 讀留言失敗後按「重試」：重新讀留言並從頭跑該路徑的完整檢查（重複比對、確認視窗）。
+   * 意見路徑依「目前」的勾選、草稿與失敗項目重新組出要發布的內容，不沿用失敗當下的內容。
+   */
+  const retryNotesRead = () => {
+    if (!notesReadError || !notesReadFailure || isPublishBusy || publishLockRef.current) return;
+    const { retry } = notesReadFailure;
+    setNotesReadFailure(null);
+    if (retry.kind === 'summary') {
+      handlePublishSummaryToMr();
+      return;
+    }
+    if (retry.kind === 'share') {
+      void handleShareAnalysisToMr();
+      return;
+    }
+    const indices =
+      retry.kind === 'single'
+        ? [retry.index]
+        : retry.kind === 'selected'
+          ? selectedIndices
+          : Object.entries(publishStates)
+              .filter(([, state]) => state.status === 'error')
+              .map(([index]) => Number(index));
+    const items = buildPublishItems(indices);
+    if (items.length === 0) {
+      setInfoMessage(
+        retry.kind === 'failed' ? '目前沒有要重試的意見。' : '目前沒有勾選要發布的意見，請先勾選再發布。'
+      );
+      return;
+    }
+    void requestPublishReviews(items, retry);
+  };
+
+  const dismissNotesReadError = () => setNotesReadFailure(null);
+
+  /**
+   * 正在進行的單則發布是哪一則：從點擊開始，經過讀留言、重複警告／發布確認、寫入，直到作業結束
+   * （讀取失敗、取消或發布完成）；該則的單則按鈕顯示 spinner。
+   */
+  const singlePublishingIndex =
+    singlePublishIndex !== null &&
+    (notesReading === 'single' || !!duplicateWarning || isPublishModalOpen || isPublishingInProgress)
+      ? singlePublishIndex
+      : null;
+
   return {
     mrUrl,
     publishDiffRefs,
@@ -455,7 +622,14 @@ ${analysisResult.testSuggestions.map((t) => `- [ ] ${t}`).join('\n')}
     isPublishingInProgress,
     publishModalConfig,
     isSharingToMr,
+    isPublishBusy,
     shareStage,
+    notesReading,
+    singlePublishingIndex,
+    notesReadError,
+    notesReadAction,
+    retryNotesRead,
+    dismissNotesReadError,
     shareConfirm,
     duplicateWarning,
     handlePublishSingleReview,

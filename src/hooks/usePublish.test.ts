@@ -2,14 +2,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SetStateAction } from 'react';
 import { actAsync, renderHook } from './test-utils';
-import { buildNoteUrl, usePublish, UsePublishOptions, PublishItem } from './usePublish';
+import { buildNoteUrl, buildNotesReadErrorMessage, usePublish, UsePublishOptions, PublishItem } from './usePublish';
 import { DEFAULT_SETTINGS } from '../types/settings';
 import { SAMPLE_ANALYSIS_RESULT } from '../services/diff-sources/sample-analysis';
 import { createPublishedRecord } from '../core/publish-dedup';
 import { SHARED_TAG_END, SHARED_TAG_START, SUMMARY_TAG } from '../services/gitlab-api';
 import type { GitLabGateway, PublishBatchFn } from '../app/app-services';
 import type { GitLabDiffRefs, GitLabMergeRequestInfo, GitLabNote, ReviewPublishState } from '../types/gitlab';
-import type { PublishedRecord } from '../core/history-store';
+import type { DraftEdits, PublishedRecord } from '../core/history-store';
 
 const MR_URL = 'https://gitlab.example.com/grp/proj/-/merge_requests/7';
 const TARGET = { baseUrl: 'https://gitlab.example.com', token: 't', projectPath: 'grp/proj', mrIid: 7 };
@@ -43,6 +43,8 @@ function setup({
   withResultRefs = true,
   currentGitLabMr = { web_url: MR_URL, diff_refs: MR_REFS } as GitLabMergeRequestInfo | null,
   hasResult = true,
+  remoteNotes = [] as GitLabNote[],
+  draftEdits = {} as DraftEdits,
 } = {}) {
   const publishBatch = vi.fn<PublishBatchFn>(async (_t, items, _refs, hooks) =>
     items.map((i) => {
@@ -85,9 +87,11 @@ function setup({
       currentGitLabMr,
       gitlabMrUrl: '',
       resultDiffRefs: withResultRefs ? RESULT_REFS : undefined,
-      remoteNotes: [],
+      remoteNotes,
       setRemoteNotes: state.remoteNotes.set,
-      draftEdits: {},
+      draftEdits,
+      selectedIndices: state.selectedIndices.box.value,
+      publishStates: state.publishStates.box.value,
       publishedRecords,
       setPublishedRecords: state.publishedRecords.set,
       setSelectedIndices: state.selectedIndices.set,
@@ -99,7 +103,7 @@ function setup({
     },
   };
   const hook = renderHook((o: UsePublishOptions) => usePublish(o), options);
-  return { ...hook, gitlab, state, publishBatch };
+  return { ...hook, gitlab, state, publishBatch, options };
 }
 
 describe('usePublish', () => {
@@ -264,11 +268,11 @@ describe('usePublish', () => {
   });
 
   it('分享分析報告：讀取留言失敗時顯示錯誤、不開確認視窗', async () => {
-    const { result, gitlab, state } = setup();
+    const { result, gitlab } = setup();
     vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(new Error('讀取留言失敗 (500)'));
     await actAsync(() => result.current.handleShareAnalysisToMr());
     expect(result.current.shareConfirm).toBeNull();
-    expect(state.error.box.value).toBe('讀取留言失敗 (500)');
+    expect(result.current.notesReadError).toContain('讀取留言失敗 (500)');
     expect(gitlab.shareAnalysis).not.toHaveBeenCalled();
   });
 
@@ -330,5 +334,412 @@ describe('usePublish', () => {
     await actAsync(() => result.current.handleShareAnalysisToMr());
     expect(state.error.box.value).toBe('請先提供目標 GitLab MR 網址以發布共享報告');
     expect(gitlab.shareAnalysis).not.toHaveBeenCalled();
+  });
+  describe('發布前讀不到 MR 留言時中止（#78）', () => {
+    const FAIL = new Error('讀取 MR 留言失敗 (第 1 頁，500)');
+    /** MR 上已有第 0 則意見的一般留言（內文含檔名與意見） */
+    const dupNote = () => note(9, `${reviews[0].file}\n${reviews[0].comment}`);
+
+    const expectNothingWritten = (gitlab: GitLabGateway) => {
+      expect(gitlab.publishBatch).not.toHaveBeenCalled();
+      expect(gitlab.createNote).not.toHaveBeenCalled();
+      expect(gitlab.updateNote).not.toHaveBeenCalled();
+      expect(gitlab.shareAnalysis).not.toHaveBeenCalled();
+    };
+
+    it('buildNotesReadErrorMessage：說明沒有送出任何留言並提示重試', () => {
+      const msg = buildNotesReadErrorMessage(FAIL);
+      expect(msg).toContain('沒有送出任何留言');
+      expect(msg).toContain('第 1 頁，500');
+      expect(msg).toContain('重試');
+      expect(buildNotesReadErrorMessage('x')).toContain('沒有送出任何留言');
+    });
+
+    it('單則／發布已選：讀取失敗時中止，不開確認、不改用先前讀到的留言比對', async () => {
+      // 先前讀到的留言裡沒有重複：若 fallback 用它比對會直接開發布確認
+      const { result, gitlab, state } = setup({ remoteNotes: [] });
+      vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+      await actAsync(() => result.current.handlePublishBatchReviews([item(0), item(1)]));
+
+      expect(result.current.notesReadError).toContain('沒有送出任何留言');
+      expect(result.current.isPublishModalOpen).toBe(false);
+      expect(result.current.duplicateWarning).toBeNull();
+      expect(result.current.isPublishingInProgress).toBe(false);
+      expect(state.remoteNotes.set).not.toHaveBeenCalled();
+      // 即使硬按確認，也沒有要發布的項目
+      expect(result.current.publishModalConfig.itemsToPublish).toEqual([]);
+      expectNothingWritten(gitlab);
+    });
+
+    it('單則／發布已選：重試會重新讀留言並從頭比對，成功後進入確認並可正常發布', async () => {
+      const { result, gitlab, publishBatch } = setup();
+      vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+      await actAsync(() => result.current.handlePublishSingleReview(reviews[1], undefined, undefined, 1));
+      expect(result.current.notesReadError).not.toBeNull();
+
+      await actAsync(() => result.current.retryNotesRead());
+      expect(gitlab.fetchNotes).toHaveBeenCalledTimes(2);
+      expect(result.current.notesReadError).toBeNull();
+      expect(result.current.isPublishModalOpen).toBe(true);
+      expect(result.current.publishModalConfig.itemsToPublish.map((i) => i.index)).toEqual([1]);
+
+      await actAsync(() => result.current.handleConfirmPublish());
+      expect(publishBatch).toHaveBeenCalledTimes(1);
+      expect(publishBatch.mock.calls[0][1].map((i) => i.index)).toEqual([1]);
+    });
+
+    it('單則／發布已選：重試時再比對到重複，仍跳重複警告', async () => {
+      const { result, gitlab } = setup();
+      vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(FAIL).mockResolvedValueOnce([dupNote()]);
+      await actAsync(() => result.current.handlePublishBatchReviews([item(0), item(1)]));
+      await actAsync(() => result.current.retryNotesRead());
+      expect(result.current.isPublishModalOpen).toBe(false);
+      expect(result.current.duplicateWarning?.duplicates.map((i) => i.index)).toEqual([0]);
+      expectNothingWritten(gitlab);
+    });
+
+    it('單則／發布已選（回歸）：讀取成功時用最新留言略過重複，讀到空陣列也會更新留言', async () => {
+      const dup = setup({ notes: [dupNote()] });
+      await actAsync(() => dup.result.current.handlePublishBatchReviews([item(0), item(1)]));
+      expect(dup.result.current.duplicateWarning?.duplicates.map((i) => i.index)).toEqual([0]);
+      expect(dup.state.remoteNotes.box.value).toEqual([dupNote()]);
+      await actAsync(() => dup.result.current.confirmDuplicateWarning());
+      expect(dup.result.current.publishModalConfig.itemsToPublish.map((i) => i.index)).toEqual([1]);
+
+      // 先前讀到的留言有重複，但 MR 上已刪除：以最新（空的）留言為準
+      const empty = setup({ remoteNotes: [dupNote()], notes: [] });
+      await actAsync(() => empty.result.current.handlePublishBatchReviews([item(0)]));
+      expect(empty.state.remoteNotes.set).toHaveBeenCalledWith([]);
+      expect(empty.result.current.duplicateWarning).toBeNull();
+      expect(empty.result.current.isPublishModalOpen).toBe(true);
+    });
+
+    it('發布摘要：讀取失敗時中止，不新增也不更新留言', async () => {
+      const { result, gitlab, state } = setup();
+      vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+      await actAsync(() => result.current.handlePublishSummaryToMr());
+      await actAsync(() => result.current.handleConfirmPublish());
+      expect(result.current.notesReadError).toContain('沒有送出任何留言');
+      expect(result.current.isPublishModalOpen).toBe(false);
+      expect(result.current.isPublishingInProgress).toBe(false);
+      expect(state.summary.box.value).toBe(false);
+      expect(state.error.box.value).toBeNull();
+      expectNothingWritten(gitlab);
+    });
+
+    it('發布摘要：重試會重新開確認，確認後重新讀留言並更新既有摘要', async () => {
+      const { result, gitlab } = setup();
+      vi.mocked(gitlab.fetchNotes)
+        .mockRejectedValueOnce(FAIL)
+        .mockResolvedValueOnce([note(5, `${SUMMARY_TAG}\n舊摘要`)]);
+      await actAsync(() => result.current.handlePublishSummaryToMr());
+      await actAsync(() => result.current.handleConfirmPublish());
+
+      await actAsync(() => result.current.retryNotesRead());
+      expect(result.current.isPublishModalOpen).toBe(true);
+      expect(result.current.publishModalConfig.isPublishingSummary).toBe(true);
+      expect(gitlab.fetchNotes).toHaveBeenCalledTimes(1);
+
+      await actAsync(() => result.current.handleConfirmPublish());
+      expect(gitlab.fetchNotes).toHaveBeenCalledTimes(2);
+      expect(gitlab.updateNote).toHaveBeenCalledWith(TARGET, 5, expect.stringContaining(SUMMARY_TAG));
+      expect(gitlab.createNote).not.toHaveBeenCalled();
+      expect(result.current.notesReadError).toBeNull();
+    });
+
+    it('共享報告：讀取失敗時中止，重試後重新讀留言並開確認視窗、確認後寫入', async () => {
+      const { result, gitlab, state } = setup();
+      vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(FAIL).mockResolvedValueOnce([note(5, `${SUMMARY_TAG}\n舊摘要`)]);
+      await actAsync(() => result.current.handleShareAnalysisToMr());
+      expect(result.current.notesReadError).toContain('沒有送出任何留言');
+      expect(result.current.shareConfirm).toBeNull();
+      expect(result.current.isPublishBusy).toBe(false);
+      expect(state.error.box.value).toBeNull();
+      expectNothingWritten(gitlab);
+
+      await actAsync(() => result.current.retryNotesRead());
+      expect(gitlab.fetchNotes).toHaveBeenCalledTimes(2);
+      expect(result.current.shareConfirm).toMatchObject({ overwrite: 'summary', targetNoteId: 5 });
+      await actAsync(() => result.current.handleConfirmShareAnalysis());
+      expect(gitlab.shareAnalysis).toHaveBeenCalledWith(TARGET, SAMPLE_ANALYSIS_RESULT, 5, RESULT_REFS.head_sha);
+    });
+
+    describe('重試依目前的勾選與草稿重新組出要發布的意見（不重送失敗當下的內容）', () => {
+      /** 改變目前的勾選／草稿／發布狀態（模擬使用者在失敗後操作畫面） */
+      const changeState = (
+        hook: ReturnType<typeof setup>,
+        over: Partial<Pick<UsePublishOptions['analysis'], 'selectedIndices' | 'draftEdits' | 'publishStates'>>
+      ) => hook.rerender({ ...hook.options, analysis: { ...hook.options.analysis, ...over } });
+      const sent = (hook: ReturnType<typeof setup>) =>
+        hook.publishBatch.mock.calls[0][1].map((i) => ({ index: i.index, comment: i.comment }));
+
+      it('發布已選：失敗後改勾選，重試送出目前勾選的意見', async () => {
+        const hook = setup();
+        vi.mocked(hook.gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+        await actAsync(() => hook.result.current.handlePublishBatchReviews([item(0), item(1)], 'selected'));
+        changeState(hook, { selectedIndices: new Set([2, 1]) });
+
+        await actAsync(() => hook.result.current.retryNotesRead());
+        expect(hook.result.current.publishModalConfig.itemsToPublish.map((i) => i.index)).toEqual([1, 2]);
+        await actAsync(() => hook.result.current.handleConfirmPublish());
+        expect(sent(hook).map((i) => i.index)).toEqual([1, 2]);
+      });
+
+      it('發布已選：失敗後改草稿，重試送出新內文', async () => {
+        const hook = setup();
+        vi.mocked(hook.gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+        await actAsync(() => hook.result.current.handlePublishBatchReviews([item(0), item(1)], 'selected'));
+        changeState(hook, { draftEdits: { 0: { comment: 'FAKE 新內文', suggestion: '' } } });
+
+        await actAsync(() => hook.result.current.retryNotesRead());
+        await actAsync(() => hook.result.current.handleConfirmPublish());
+        expect(sent(hook)).toEqual([
+          { index: 0, comment: 'FAKE 新內文' },
+          { index: 1, comment: reviews[1].comment },
+        ]);
+      });
+
+      it('發布已選：失敗後取消全部勾選，重試不讀留言、不發布並提示', async () => {
+        const hook = setup();
+        vi.mocked(hook.gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+        await actAsync(() => hook.result.current.handlePublishBatchReviews([item(0), item(1)], 'selected'));
+        changeState(hook, { selectedIndices: new Set() });
+
+        await actAsync(() => hook.result.current.retryNotesRead());
+        expect(hook.gitlab.fetchNotes).toHaveBeenCalledTimes(1);
+        expect(hook.result.current.isPublishModalOpen).toBe(false);
+        expect(hook.state.info.box.value).toBe('目前沒有勾選要發布的意見，請先勾選再發布。');
+      });
+
+      it('單則：失敗後改草稿，重試送出該則的新內文（不受勾選影響）', async () => {
+        const hook = setup();
+        vi.mocked(hook.gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+        await actAsync(() => hook.result.current.handlePublishSingleReview(reviews[3], undefined, undefined, 3));
+        changeState(hook, { draftEdits: { 3: { comment: 'FAKE 單則新內文', suggestion: '' } } });
+
+        await actAsync(() => hook.result.current.retryNotesRead());
+        await actAsync(() => hook.result.current.handleConfirmPublish());
+        expect(sent(hook)).toEqual([{ index: 3, comment: 'FAKE 單則新內文' }]);
+      });
+
+      it('重試失敗 N 則：重試時依目前的失敗項目與草稿重新組出', async () => {
+        const hook = setup();
+        const error: ReviewPublishState = { status: 'error', errorMessage: 'FAKE' };
+        changeState(hook, { publishStates: { 2: error, 4: error } });
+        vi.mocked(hook.gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+        await actAsync(() => hook.result.current.handlePublishBatchReviews([item(2), item(4)], 'failed'));
+        // 失敗後第 4 則已改用單則發布成功，第 2 則改了草稿
+        changeState(hook, {
+          publishStates: { 2: error, 4: { status: 'published', discussionId: 'd4', mode: 'inline' } },
+          draftEdits: { 2: { comment: 'FAKE 重試新內文', suggestion: '' } },
+        });
+
+        await actAsync(() => hook.result.current.retryNotesRead());
+        await actAsync(() => hook.result.current.handleConfirmPublish());
+        expect(sent(hook)).toEqual([{ index: 2, comment: 'FAKE 重試新內文' }]);
+      });
+    });
+
+    it('切換 MR：從 A 切到 B 後 B 的留言讀取失敗，發布中止，不用 A 的留言通過重複檢查', async () => {
+      // A 的留言沒有任何重複：若誤用 A 的留言（remoteNotes）比對，B 的發布會直接開確認
+      const a = note(1, 'FAKE A 的其他留言');
+      const hook = setup({ remoteNotes: [a] });
+      const mrB = { web_url: `${MR_URL.replace(/7$/, '8')}`, diff_refs: MR_REFS } as GitLabMergeRequestInfo;
+      hook.rerender({ ...hook.options, analysis: { ...hook.options.analysis, currentGitLabMr: mrB, remoteNotes: [a] } });
+      vi.mocked(hook.gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+
+      await actAsync(() => hook.result.current.handlePublishBatchReviews([item(0), item(1)], 'selected'));
+      expect(hook.gitlab.resolveTarget).toHaveBeenLastCalledWith(mrB.web_url, DEFAULT_SETTINGS);
+      expect(hook.result.current.notesReadError).toContain('沒有送出任何留言');
+      expect(hook.result.current.isPublishModalOpen).toBe(false);
+      expect(hook.result.current.duplicateWarning).toBeNull();
+      expect(hook.state.remoteNotes.set).not.toHaveBeenCalled();
+      expectNothingWritten(hook.gitlab);
+    });
+
+    it('換了 MR 後不再顯示前一個 MR 的讀取失敗，重試也不動作', async () => {
+      const hook = setup();
+      vi.mocked(hook.gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+      await actAsync(() => hook.result.current.handleShareAnalysisToMr());
+      expect(hook.result.current.notesReadError).not.toBeNull();
+
+      const otherMr = { web_url: `${MR_URL}9`, diff_refs: MR_REFS } as GitLabMergeRequestInfo;
+      hook.rerender({ ...hook.options, analysis: { ...hook.options.analysis, currentGitLabMr: otherMr } });
+      expect(hook.result.current.notesReadError).toBeNull();
+      await actAsync(() => hook.result.current.retryNotesRead());
+      expect(hook.gitlab.fetchNotes).toHaveBeenCalledTimes(1);
+    });
+
+    it('關閉錯誤後不再顯示', async () => {
+      const { result, gitlab } = setup();
+      vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+      await actAsync(() => result.current.handlePublishBatchReviews([item(0)]));
+      await actAsync(() => result.current.dismissNotesReadError());
+      expect(result.current.notesReadError).toBeNull();
+    });
+  });
+
+  describe('讀取失敗的動作名稱與單則發布中（#78）', () => {
+    const FAIL = new Error('FAKE 讀取失敗');
+
+    it('notesReadAction 依實際路徑命名', async () => {
+      const cases: Array<[string, (r: ReturnType<typeof setup>['result']) => unknown]> = [
+        ['發布已選意見', (r) => r.current.handlePublishBatchReviews([item(0)], 'selected')],
+        ['重試失敗意見', (r) => r.current.handlePublishBatchReviews([item(0)], 'failed')],
+        ['發布單則意見', (r) => r.current.handlePublishSingleReview(reviews[0], undefined, undefined, 0)],
+        ['共享分析', (r) => r.current.handleShareAnalysisToMr()],
+      ];
+      for (const [label, run] of cases) {
+        const { result, gitlab } = setup();
+        vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+        await actAsync(async () => {
+          await run(result);
+        });
+        expect(result.current.notesReadAction).toBe(label);
+      }
+
+      const { result, gitlab } = setup();
+      await actAsync(() => result.current.handlePublishSummaryToMr());
+      vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+      await actAsync(() => result.current.handleConfirmPublish());
+      expect(result.current.notesReadAction).toBe('發布摘要');
+
+      await actAsync(() => result.current.dismissNotesReadError());
+      expect(result.current.notesReadAction).toBeNull();
+    });
+
+    it('讀留言中的路徑：單則為 single、重試失敗為 failed', async () => {
+      for (const [kind, run] of [
+        ['single', (r: ReturnType<typeof setup>['result']) => r.current.handlePublishSingleReview(reviews[2], undefined, undefined, 2)],
+        ['failed', (r: ReturnType<typeof setup>['result']) => r.current.handlePublishBatchReviews([item(2)], 'failed')],
+      ] as const) {
+        const { result, gitlab } = setup();
+        let release!: (notes: GitLabNote[]) => void;
+        vi.mocked(gitlab.fetchNotes).mockImplementationOnce(() => new Promise((r) => (release = r)));
+        await actAsync(() => run(result));
+        expect(result.current.notesReading).toBe(kind);
+        await actAsync(() => release([]));
+        expect(result.current.notesReading).toBeNull();
+      }
+    });
+
+    it('singlePublishingIndex：從點擊、讀留言、確認視窗到發布完成都是該則；結束後為 null', async () => {
+      const { result, gitlab } = setup();
+      let release!: (notes: GitLabNote[]) => void;
+      vi.mocked(gitlab.fetchNotes).mockImplementationOnce(() => new Promise((r) => (release = r)));
+      await actAsync(() => result.current.handlePublishSingleReview(reviews[2], undefined, undefined, 2));
+      expect(result.current.singlePublishingIndex).toBe(2);
+      await actAsync(() => release([]));
+      expect(result.current.isPublishModalOpen).toBe(true);
+      expect(result.current.singlePublishingIndex).toBe(2);
+      await actAsync(() => result.current.handleConfirmPublish());
+      expect(result.current.singlePublishingIndex).toBeNull();
+    });
+
+    it('singlePublishingIndex：取消確認視窗、讀取失敗或改用發布已選時為 null', async () => {
+      const { result, gitlab } = setup();
+      await actAsync(() => result.current.handlePublishSingleReview(reviews[2], undefined, undefined, 2));
+      expect(result.current.singlePublishingIndex).toBe(2);
+      await actAsync(() => result.current.setIsPublishModalOpen(false));
+      expect(result.current.singlePublishingIndex).toBeNull();
+
+      vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(FAIL);
+      await actAsync(() => result.current.handlePublishSingleReview(reviews[2], undefined, undefined, 2));
+      expect(result.current.notesReadError).not.toBeNull();
+      expect(result.current.singlePublishingIndex).toBeNull();
+
+      await actAsync(() => result.current.handlePublishBatchReviews([item(0)], 'selected'));
+      expect(result.current.isPublishModalOpen).toBe(true);
+      expect(result.current.singlePublishingIndex).toBeNull();
+    });
+  });
+
+  describe('防連點：從讀留言開始就算發布中（#78）', () => {
+    it('單則／發布已選：讀留言期間 isPublishingInProgress 為 true，連點只讀一次', async () => {
+      const { result, gitlab } = setup();
+      let release!: (notes: GitLabNote[]) => void;
+      vi.mocked(gitlab.fetchNotes).mockImplementationOnce(() => new Promise((r) => (release = r)));
+      await actAsync(() => {
+        // 同一輪連點三次（state 尚未重新 render）
+        result.current.handlePublishBatchReviews([item(0)]);
+        result.current.handlePublishBatchReviews([item(0)]);
+        result.current.handlePublishSingleReview(reviews[0], undefined, undefined, 0);
+      });
+      expect(result.current.isPublishingInProgress).toBe(true);
+      expect(result.current.isPublishBusy).toBe(true);
+      expect(result.current.notesReading).toBe('selected');
+      // 重新 render 後再點，也被擋下
+      await actAsync(() => result.current.handlePublishBatchReviews([item(1)]));
+      await actAsync(() => result.current.handleShareAnalysisToMr());
+      await actAsync(() => result.current.handlePublishSummaryToMr());
+      expect(result.current.isPublishModalOpen).toBe(false);
+      expect(gitlab.fetchNotes).toHaveBeenCalledTimes(1);
+
+      await actAsync(() => release([]));
+      expect(result.current.isPublishingInProgress).toBe(false);
+      expect(result.current.isPublishModalOpen).toBe(true);
+      expect(result.current.notesReading).toBeNull();
+      expect(result.current.publishModalConfig.itemsToPublish.map((i) => i.index)).toEqual([0]);
+    });
+
+    it('共享報告讀留言期間，單則／發布已選與摘要都不會開始', async () => {
+      const { result, gitlab } = setup();
+      let release!: (notes: GitLabNote[]) => void;
+      vi.mocked(gitlab.fetchNotes).mockImplementationOnce(() => new Promise((r) => (release = r)));
+      let reading!: Promise<void>;
+      await actAsync(() => {
+        reading = result.current.handleShareAnalysisToMr();
+        void result.current.handleShareAnalysisToMr();
+      });
+      expect(result.current.isPublishBusy).toBe(true);
+      await actAsync(() => result.current.handlePublishBatchReviews([item(0)]));
+      await actAsync(() => result.current.handlePublishSummaryToMr());
+      expect(result.current.isPublishModalOpen).toBe(false);
+      expect(gitlab.fetchNotes).toHaveBeenCalledTimes(1);
+      await actAsync(async () => {
+        release([]);
+        await reading;
+      });
+      expect(result.current.isPublishBusy).toBe(false);
+      expect(result.current.shareConfirm).not.toBeNull();
+    });
+
+    it('發布摘要：確認後讀留言期間為發布中，連按確認只讀一次、只寫一次', async () => {
+      const { result, gitlab } = setup();
+      await actAsync(() => result.current.handlePublishSummaryToMr());
+      let release!: (notes: GitLabNote[]) => void;
+      vi.mocked(gitlab.fetchNotes).mockImplementationOnce(() => new Promise((r) => (release = r)));
+      let confirming!: Promise<void>;
+      await actAsync(() => {
+        confirming = result.current.handleConfirmPublish();
+        void result.current.handleConfirmPublish();
+      });
+      expect(result.current.isPublishingInProgress).toBe(true);
+      expect(result.current.notesReading).toBe('summary');
+      await actAsync(() => result.current.handleConfirmPublish());
+      expect(gitlab.fetchNotes).toHaveBeenCalledTimes(1);
+      await actAsync(async () => {
+        release([]);
+        await confirming;
+      });
+      expect(gitlab.createNote).toHaveBeenCalledTimes(1);
+      expect(result.current.isPublishingInProgress).toBe(false);
+      expect(result.current.notesReading).toBeNull();
+    });
+
+    it('讀取失敗後的「重試」在讀留言期間連點只讀一次', async () => {
+      const { result, gitlab } = setup();
+      vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(new Error('x'));
+      await actAsync(() => result.current.handlePublishBatchReviews([item(0)]));
+      let release!: (notes: GitLabNote[]) => void;
+      vi.mocked(gitlab.fetchNotes).mockImplementationOnce(() => new Promise((r) => (release = r)));
+      await actAsync(() => {
+        result.current.retryNotesRead();
+        result.current.retryNotesRead();
+      });
+      expect(gitlab.fetchNotes).toHaveBeenCalledTimes(2);
+      await actAsync(() => release([]));
+      expect(result.current.isPublishModalOpen).toBe(true);
+    });
   });
 });

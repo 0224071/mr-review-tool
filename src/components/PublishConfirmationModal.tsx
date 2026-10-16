@@ -47,6 +47,8 @@ interface PublishConfirmationModalProps {
   /** 標註於標題、內容與按鈕（示範模式：「示範，未實際發布」） */
   notice?: string;
   isPublishing: boolean;
+  /** 確認後正在讀取 MR 留言（整體摘要發布前的重複檢查）：確認按鈕顯示「讀取留言中…」 */
+  isReadingNotes?: boolean;
 }
 
 /** 共享確認視窗中說明留言內容的小字 */
@@ -78,6 +80,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
   targetLabel,
   notice,
   isPublishing,
+  isReadingNotes = false,
 }) => {
   if (!isOpen) return null;
 
@@ -298,6 +301,10 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
 
         {/* Footer */}
         <div className="px-4 sm:px-6 py-3.5 bg-surface-subtle border-t border-surface-border flex flex-wrap items-center justify-end gap-2.5">
+          {/* 讀取留言中／發布中的狀態（螢幕報讀器）；確認視窗開著時背景頁面的狀態可能讀不到 */}
+          <p className="sr-only" aria-live="polite" aria-atomic="true">
+            {isPublishing ? (isReadingNotes ? '正在讀取 MR 留言，尚未送出任何留言…' : share ? '共享中…' : '發布中…') : ''}
+          </p>
           <button
             type="button"
             onClick={onClose}
@@ -315,7 +322,7 @@ export const PublishConfirmationModal: React.FC<PublishConfirmationModalProps> =
             {isPublishing ? (
               <>
                 <div className="w-3.5 h-3.5 border-2 border-surface/30 border-t-surface rounded-full animate-spin" />
-                <span>{share ? '共享中...' : '發布中...'}</span>
+                <span>{isReadingNotes ? '讀取留言中…' : share ? '共享中...' : '發布中...'}</span>
               </>
             ) : (
               <>
