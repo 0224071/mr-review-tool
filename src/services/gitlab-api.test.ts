@@ -86,26 +86,119 @@ describe('fetchGitLabMrNotes', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('第一頁失敗回傳空陣列', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ message: '403' }, {}, 403)));
-    expect(await fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).toEqual([]);
+  it('第 1 頁失敗時拋錯（不回傳空陣列）', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ message: '403' }, {}, 403));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 1 頁，403');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('之後的頁面失敗時拋錯，不回傳不完整的留言', async () => {
+  it('第 1 頁網路錯誤時拋錯', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))));
+    await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('Failed to fetch');
+  });
+
+  it('第 2 頁失敗時拋錯，不回傳不完整的留言', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) =>
         pageOf(url) === 1 ? jsonResponse(range(1, 100), { 'x-next-page': '2' }) : jsonResponse({}, {}, 500)
       )
     );
-    await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 2 頁');
+    await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 2 頁，500');
   });
 
-  it('x-next-page 不前進時停止，避免無限迴圈', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse(range(1, 100), { 'x-next-page': '1' }));
+  it('回應不是陣列時拋錯（第 1 頁或之後的頁面）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ message: 'not a list' })));
+    await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 1 頁回應格式不正確');
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        pageOf(url) === 1 ? jsonResponse(range(1, 100), { 'x-next-page': '2' }) : jsonResponse(null)
+      )
+    );
+    await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 2 頁回應格式不正確');
+  });
+
+  it('超過分頁上限（100 頁）仍有下一頁時拋錯', async () => {
+    const fetchMock = vi.fn(async (url: string) => jsonResponse(range(1, 1), { 'x-next-page': String(pageOf(url) + 1) }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('超過 100 頁上限');
+    expect(fetchMock).toHaveBeenCalledTimes(100);
+  });
+
+  it('剛好 100 頁、最後一頁沒有下一頁時正常回傳', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const p = pageOf(url);
+      return jsonResponse(range(p, 1), { 'x-next-page': p < 100 ? String(p + 1) : '' });
+    });
     vi.stubGlobal('fetch', fetchMock);
     expect(await fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).toHaveLength(100);
+    expect(fetchMock).toHaveBeenCalledTimes(100);
+  });
+
+  describe('x-next-page 必須整串是數字且恰好是目前頁 +1，否則拋錯（不回傳可能漏頁的留言）', () => {
+    /** 第 1 頁回 nextOnPage1；第 2 頁（若有讀到）回 nextOnPage2 */
+    const stubPages = (nextOnPage1: string, nextOnPage2 = '') => {
+      const fetchMock = vi.fn(async (url: string) =>
+        pageOf(url) === 1
+          ? jsonResponse(range(1, 100), { 'x-next-page': nextOnPage1 })
+          : jsonResponse(range(101, 100), { 'x-next-page': nextOnPage2 })
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    };
+
+    it('數字後面接其他字元（\'2abc\'）時拋錯', async () => {
+      const fetchMock = stubPages('2abc');
+      await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 1 頁的分頁資訊不正確');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('不是數字（\'abc\'）時拋錯', async () => {
+      stubPages('abc');
+      await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 1 頁的分頁資訊不正確');
+    });
+
+    it('跳頁（第 1 頁回 3）時拋錯，不跳過第 2 頁', async () => {
+      const fetchMock = stubPages('3');
+      await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 1 頁的分頁資訊不正確');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('倒退（第 2 頁回 1）時拋錯', async () => {
+      const fetchMock = stubPages('2', '1');
+      await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 2 頁的分頁資訊不正確');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('重複頁（第 1 頁回 1）時拋錯，不無限迴圈', async () => {
+      const fetchMock = stubPages('1');
+      await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 1 頁的分頁資訊不正確');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('前後有空白的正確頁碼（\' 2 \'）照常讀下一頁', async () => {
+      const fetchMock = stubPages(' 2 ');
+      expect(await fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).toHaveLength(200);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('沒有分頁 header 且不滿一頁時視為只有一頁，正常回傳（不誤判為異常）', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(range(1, 12)));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).toHaveLength(12);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('HTTP 200 但回應不是 JSON 時拋錯', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('<html>FAKE login page</html>', { status: 200, headers: { 'Content-Type': 'text/html' } }))
+    );
+    await expect(fetchGitLabMrNotes('https://gitlab.com', 't', 'a/b', 1)).rejects.toThrow('第 1 頁回應不是 JSON');
   });
 });
 

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { actAsync, createMemoryStore, makeRecord, renderHook } from './test-utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { actAsync, createMemoryStore, makeRecord, renderHook, stubGitLabFetch } from './test-utils';
 import { useAnalysis, UseAnalysisOptions } from './useAnalysis';
 import { DEFAULT_SETTINGS } from '../types/settings';
 import { SAMPLE_GIT_DIFF } from '../services/diff-sources/sample-diffs';
@@ -11,6 +11,7 @@ import { buildDiffHistoryKey, buildMrHistoryKey, HistoryStore } from '../core/hi
 import { buildProviderCacheKey } from '../core/analysis-record';
 import { SHARED_TAG_END, SHARED_TAG_START } from '../services/gitlab-api';
 import type { GitLabGateway } from '../app/app-services';
+import { liveGitLabGateway } from '../app/live-services';
 import type { GitLabMergeRequestInfo, GitLabNote } from '../types/gitlab';
 import type { MRAnalysisResult } from '../types/review';
 
@@ -42,14 +43,17 @@ function setup({
   settings = DEFAULT_SETTINGS,
   initialRawDiff = SAMPLE_GIT_DIFF,
   notes = [] as GitLabNote[],
+  gitlabGateway,
 }: {
   store?: HistoryStore | null;
   providerReady?: boolean;
   settings?: typeof DEFAULT_SETTINGS;
   initialRawDiff?: string;
   notes?: GitLabNote[];
+  /** 改用指定的 gateway（例如正式版 gateway 搭配模擬的 fetch） */
+  gitlabGateway?: GitLabGateway;
 } = {}) {
-  const gitlab = {
+  const gitlab = gitlabGateway ?? {
     resolveTarget: vi.fn(() => ({ baseUrl: 'https://gitlab.example.com', token: 't', projectPath: 'grp/proj', mrIid: 7 })),
     fetchMergeRequest: vi.fn(async () => MR),
     fetchRawDiff: vi.fn(async () => SAMPLE_GIT_DIFF),
@@ -83,6 +87,10 @@ function setup({
 
 beforeEach(() => {
   analyzeGitDiff.mockReset();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('useAnalysis', () => {
@@ -343,6 +351,37 @@ describe('useAnalysis', () => {
         await fetchB;
       });
       expectShowingB(result.current);
+    });
+  });
+
+  describe('抓取 MR 時讀不到留言（#78）', () => {
+    it('不崩潰、MR 與 diff 照常填入，既有的留言不被清成 []', async () => {
+      const first = note('FAKE 既有留言');
+      const { result, gitlab } = setup({ notes: [first] });
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+      expect(result.current.remoteNotes).toEqual([first]);
+
+      vi.mocked(gitlab.fetchNotes).mockRejectedValueOnce(new Error('讀取 MR 留言失敗 (第 1 頁，500)'));
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+      expect(result.current.remoteNotes).toEqual([first]);
+      expect(result.current.currentGitLabMr).toBe(MR);
+      expect(result.current.rawDiff).toBe(SAMPLE_GIT_DIFF);
+      expect(result.current.gitlabError).toBeNull();
+      expect(result.current.isFetchingGitLab).toBe(false);
+    });
+
+    it('正式版 gateway：留言 GET 回 500 時只送 GET，不送出任何寫入', async () => {
+      const { writes, fetchMock } = stubGitLabFetch({ mr: MR, rawDiff: SAMPLE_GIT_DIFF, notes: () => 500 });
+      const { result } = setup({
+        gitlabGateway: liveGitLabGateway,
+        settings: { ...DEFAULT_SETTINGS, gitlabToken: 'FAKE-token' },
+      });
+      await actAsync(() => result.current.handleFetchGitLabMr(MR_URL));
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/notes'))).toBe(true);
+      expect(writes).toEqual([]);
+      expect(result.current.remoteNotes).toEqual([]);
+      expect(result.current.currentGitLabMr).toEqual(MR);
+      expect(result.current.gitlabError).toBeNull();
     });
   });
 

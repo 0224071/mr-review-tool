@@ -90,18 +90,26 @@ export function useHistory({
     onOpenRecord(record);
 
     if (record.sourceType !== 'gitlab' || !record.mrUrl) return;
+    let target: ReturnType<typeof gitlab.resolveTarget>;
     try {
-      const target = gitlab.resolveTarget(record.mrUrl, settings);
-      const [latestMr, notes] = await Promise.all([gitlab.fetchMergeRequest(target), gitlab.fetchNotes(target)]);
-      if (currentRecordIdRef.current !== id) return;
-      onRemoteNotes(notes);
-      const latestHead = latestMr.diff_refs?.head_sha ?? null;
-      if (latestHead && latestHead !== record.latestHeadSha) {
-        await historyStore.update(id, { latestHeadSha: latestHead });
-        await refreshHistory();
-      }
+      target = gitlab.resolveTarget(record.mrUrl, settings);
     } catch {
-      // 連不到 GitLab 時仍顯示快取結果
+      return;
+    }
+    // MR 資訊與留言分開處理：一邊失敗不影響另一邊
+    const [mrResult, notesResult] = await Promise.allSettled([gitlab.fetchMergeRequest(target), gitlab.fetchNotes(target)]);
+    if (currentRecordIdRef.current !== id) return;
+    if (notesResult.status === 'fulfilled') {
+      onRemoteNotes(notesResult.value);
+    } else {
+      // TODO(#79): 讀不到留言時要提示使用者（目前不顯示錯誤）。
+      // 不呼叫 onRemoteNotes，保留既有的留言（發布前會重新讀，讀不到就中止）
+    }
+    if (mrResult.status !== 'fulfilled') return; // 連不到 GitLab 時仍顯示快取結果
+    const latestHead = mrResult.value.diff_refs?.head_sha ?? null;
+    if (latestHead && latestHead !== record.latestHeadSha) {
+      await historyStore.update(id, { latestHeadSha: latestHead }).catch(() => undefined);
+      await refreshHistory();
     }
   };
 
